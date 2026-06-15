@@ -1,39 +1,77 @@
 # ChaosEngine
 
-#### 介绍
-{**以下是 Gitee 平台说明，您可以替换此简介**
-Gitee 是 OSCHINA 推出的基于 Git 的代码托管平台（同时支持 SVN）。专为开发者提供稳定、高效、安全的云端软件开发协作平台
-无论是个人、团队、或是企业，都能够用 Gitee 实现代码托管、项目管理、协作开发。企业项目请看 [https://gitee.com/enterprises](https://gitee.com/enterprises)}
+> 面向 3D 多人游戏的、客户端/服务器同构的、纯 C 内核 + Lua 脚本的轻量级开源游戏引擎。
 
-#### 软件架构
-软件架构说明
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Standard](https://img.shields.io/badge/C-99-blue.svg)]()
+[![Standard](https://img.shields.io/badge/C%2B%2B-17-blue.svg)]()
 
+## 设计理念
 
-#### 安装教程
+- **极度简洁** — 内核代码量最小化，每个模块只做一件事
+- **高效执行** — 纯 C 内核，Cache-Friendly 数据布局
+- **同构逻辑** — 同一份战斗代码，客户端帧同步 + 服务端状态同步
+- **严格分层** — C 内核 → public_api → C++ 编辑器，三层隔离
+- **全平台** — Windows / Linux / macOS / iOS / Android
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+## 架构概览
 
-#### 使用说明
+```
+┌────────────────────────────────────────────┐
+│            编辑器层 (C++17)                  │
+│    Dear ImGui / 资源导入 / 第八模式观测      │
+├────────────────────────────────────────────┤
+│           public_api (纯 C 头文件)           │
+├────────────────────────────────────────────┤
+│            引擎内核 (纯 C99)                 │
+│  Core │ ECS │ Render(RHI) │ Network │ Lua  │
+├────────────────────────────────────────────┤
+│  平台抽象: Win / Linux / macOS / iOS / Android │
+└────────────────────────────────────────────┘
+```
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+## 快速开始
 
-#### 参与贡献
+```bash
+# 克隆
+git clone https://gitee.com/zhong-fangdao/chaos-engine.git
+cd chaos-engine
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+# 编译 (需要 CMake 3.20+)
+mkdir build && cd build
+cmake .. -DCHAOS_BUILD_EDITOR=ON
+cmake --build .
 
+# 运行编辑器
+./bin/chaos_editor
 
-#### 特技
+# 运行无头模式（服务器/测试）
+./bin/chaos_headless
+```
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+## 编译选项
+
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `CHAOS_BUILD_EDITOR` | ON | 编译 C++ 编辑器 |
+| `CHAOS_BUILD_TESTS` | OFF | 编译单元测试 |
+| `CHAOS_BUILD_SAMPLES` | OFF | 编译示例程序 |
+
+## 参考引擎
+
+| 引擎 | 借鉴内容 |
+|------|----------|
+| Skynet | Actor 并发模型、Lua 服务化 |
+| KBEngine | Cell 空间划分、动态 AOI |
+| Ant Engine | 纯 ECS 架构、Archetype 存储 |
+| Unreal Engine | Actor/Component 概念、属性复制 |
+
+## 开发状态
+
+当前版本：**v0.1 (MVP)** — 最小可运行骨架
+
+详见 [设计规格说明书](docs/spec/chaos-engine-spec-v0.1.md)
+
+## 许可证
+
+MIT License
