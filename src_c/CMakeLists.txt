@@ -20,6 +20,10 @@ file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/public_api/*.h"
 )
 
+# Vulkan 头文件路径
+set(VULKAN_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/vulkan/include")
+set(X11_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/x11/include")
+
 # 静态库目标
 add_library(engine_core STATIC ${ENGINE_CORE_SOURCES})
 
@@ -39,6 +43,8 @@ target_include_directories(engine_core
         ${CMAKE_CURRENT_SOURCE_DIR}/network
         ${CMAKE_CURRENT_SOURCE_DIR}/script
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+        ${VULKAN_HEADERS_DIR}
+        ${X11_HEADERS_DIR}
 )
 
 target_compile_options(engine_core PRIVATE
@@ -76,3 +82,29 @@ target_include_directories(chaos_headless PRIVATE
 )
 target_link_libraries(chaos_headless PRIVATE engine_core)
 set_target_properties(chaos_headless PROPERTIES LINKER_LANGUAGE C)
+
+# ============================================================
+# Vulkan 客户端可执行文件
+# ============================================================
+add_executable(chaos_client
+    runtime/ce_client_main.c
+)
+target_include_directories(chaos_client PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${VULKAN_HEADERS_DIR}
+    ${X11_HEADERS_DIR}
+)
+target_link_libraries(chaos_client PRIVATE engine_core)
+
+# 链接 Vulkan 和 X11
+if(UNIX AND NOT APPLE)
+    target_link_libraries(chaos_client PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/vulkan/lib/libvulkan.so.1
+        ${CMAKE_SOURCE_DIR}/third_party/x11/lib/libX11.so
+    )
+elseif(WIN32)
+    target_link_libraries(chaos_client PRIVATE vulkan-1)
+else()
+    target_link_libraries(chaos_client PRIVATE vulkan)
+endif()
+set_target_properties(chaos_client PROPERTIES LINKER_LANGUAGE C)
