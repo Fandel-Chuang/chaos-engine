@@ -4,6 +4,9 @@
  */
 
 #include "chaos_engine.h"
+#include "ui/editor_ui.h"
+#include "log_observer/log_observer.h"
+
 #include <cstdio>
 #include <csignal>
 
@@ -34,12 +37,19 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // 初始化编辑器 UI
+    ChaosEditor::Init();
+
+    // 初始化日志观测器（第八模式）
+    ChaosEditor::LogObserver log_observer;
+    log_observer.Init();
+
     printf("========================================\n");
     printf("  ChaosEngine Editor v0.1.0\n");
     printf("  Architecture: C kernel + C++ editor\n");
     printf("========================================\n");
 
-    // 注册编辑器日志回调
+    // 注册编辑器日志回调（终端输出）
     ce_log_add_callback([](const CeLogEntry* entry, void*) {
         const char* level_str = "????";
         switch (entry->level) {
@@ -57,11 +67,27 @@ int main(int argc, char** argv) {
 
     // 主循环
     while (g_running && ce_update()) {
-        // TODO: 渲染 Dear ImGui 界面
-        // TODO: 处理编辑器输入
+        // ---- 编辑器 UI 面板渲染 ----
+        ChaosEditor::BeginFrame();
+
+        ChaosEditor::ShowHierarchy();
+        ChaosEditor::ShowInspector();
+        ChaosEditor::ShowConsole();
+        ChaosEditor::ShowPluginMonitor();
+        ChaosEditor::ShowStats();
+
+        // 第八模式：日志观测面板
+        log_observer.Update();
+        log_observer.Render();
+
+        ChaosEditor::EndFrame();
     }
 
     printf("\nShutting down...\n");
+
+    // 关闭编辑器 UI
+    ChaosEditor::Shutdown();
+
     ce_shutdown();
     printf("Editor shut down cleanly.\n");
     return 0;

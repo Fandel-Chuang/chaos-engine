@@ -24,6 +24,10 @@ file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS
 set(VULKAN_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/vulkan/include")
 set(X11_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/x11/include")
 
+# Lua 5.4 路径
+set(LUA_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/lua/include")
+set(LUA_LIB_DIR "${CMAKE_SOURCE_DIR}/third_party/lua/lib")
+
 # 静态库目标
 add_library(engine_core STATIC ${ENGINE_CORE_SOURCES})
 
@@ -45,6 +49,7 @@ target_include_directories(engine_core
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime
         ${VULKAN_HEADERS_DIR}
         ${X11_HEADERS_DIR}
+        ${LUA_HEADERS_DIR}
 )
 
 target_compile_options(engine_core PRIVATE
@@ -57,7 +62,7 @@ target_compile_options(engine_core PRIVATE
 if(WIN32)
     target_link_libraries(engine_core PRIVATE winmm)
 elseif(UNIX AND NOT APPLE)
-    target_link_libraries(engine_core PRIVATE m pthread dl)
+    target_link_libraries(engine_core PRIVATE m pthread dl ${LUA_LIB_DIR}/liblua5.4.so)
 elseif(APPLE)
     target_link_libraries(engine_core PRIVATE
         "-framework Foundation"
@@ -108,3 +113,15 @@ else()
     target_link_libraries(chaos_client PRIVATE vulkan)
 endif()
 set_target_properties(chaos_client PROPERTIES LINKER_LANGUAGE C)
+
+# ============================================================
+# TCP 回显服务器可执行文件
+# ============================================================
+add_executable(chaos_server
+    runtime/ce_server_main.c
+)
+target_include_directories(chaos_server PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(chaos_server PRIVATE engine_core)
+set_target_properties(chaos_server PROPERTIES LINKER_LANGUAGE C)
