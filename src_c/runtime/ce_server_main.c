@@ -9,6 +9,8 @@
 #define _POSIX_C_SOURCE 200112L
 #include "public_api/chaos_engine.h"
 #include "network/ce_network.h"
+#include "server/ce_cell.h"
+#include "server/ce_aoi.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,6 +56,15 @@ int main(int argc, char** argv) {
         ce_shutdown();
         return 1;
     }
+
+    /* 初始化服务端空间子系统（AOI + Cell） */
+    if (ce_cell_init(10000.0f, 10000.0f, 500.0f, 500.0f, 150, 20) != CE_OK) {
+        fprintf(stderr, "Failed to initialize Cell manager\n");
+        ce_net_shutdown();
+        ce_shutdown();
+        return 1;
+    }
+    printf("[Server] Cell manager initialized: 10000x10000 world, 500x500 cells\n");
 
     /* 创建监听 socket */
     CeSocket* listen_sock = ce_socket_create_tcp();
@@ -172,6 +183,7 @@ int main(int argc, char** argv) {
 
     /* 清理网络层和引擎 */
     ce_net_shutdown();
+    ce_cell_shutdown();
     ce_shutdown();
 
     printf("Echo server shut down cleanly.\n");

@@ -115,6 +115,11 @@ endif()
 set_target_properties(chaos_client PROPERTIES LINKER_LANGUAGE C)
 
 # ============================================================
+# 服务端模块 (AOI + Cell)
+# ============================================================
+add_subdirectory(server)
+
+# ============================================================
 # TCP 回显服务器可执行文件
 # ============================================================
 add_executable(chaos_server
@@ -123,5 +128,5 @@ add_executable(chaos_server
 target_include_directories(chaos_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_link_libraries(chaos_server PRIVATE engine_core)
+target_link_libraries(chaos_server PRIVATE engine_core engine_server)
 set_target_properties(chaos_server PROPERTIES LINKER_LANGUAGE C)

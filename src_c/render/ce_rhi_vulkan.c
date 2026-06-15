@@ -136,88 +136,7 @@ static const uint32_t g_frag_shader_spv[] = {
     0x00000009,0x00000011,0x000100FD,0x00010038
 };
 
-/* ---- 设备结构 ---- */
-
-struct CeRhiDevice {
-    /* Vulkan 实例 */
-    VkInstance       instance;
-    VkPhysicalDevice physical_device;
-    VkDevice         device;
-    VkQueue          graphics_queue;
-    VkQueue          present_queue;
-    uint32_t         graphics_family;
-    uint32_t         present_family;
-
-    /* 表面 & 交换链 */
-    VkSurfaceKHR     surface;
-    VkSwapchainKHR   swapchain;
-    VkFormat         swapchain_format;
-    VkExtent2D       swapchain_extent;
-    uint32_t         image_count;
-    VkImage*         swapchain_images;
-    VkImageView*     swapchain_views;
-    VkFramebuffer*   framebuffers;
-
-    /* 渲染通道 */
-    VkRenderPass     render_pass;
-
-    /* 命令 */
-    VkCommandPool    command_pool;
-    VkCommandBuffer* command_buffers;
-
-    /* 同步 */
-    VkSemaphore*     image_available;
-    VkSemaphore*     render_finished;
-    VkFence*         in_flight_fences;
-    uint32_t         current_frame;
-    uint32_t         current_image_index;  /* 当前帧的交换链图像索引 */
-
-    /* 管线 */
-    VkPipelineLayout pipeline_layout;
-    VkPipeline       graphics_pipeline;
-
-    /* 窗口 */
-    CeWindow*        window;
-    int              width;
-    int              height;
-    CeBool           should_close;
-
-    /* 调试 */
-    VkDebugUtilsMessengerEXT debug_messenger;
-};
-
-/* ---- 缓冲结构 ---- */
-
-struct CeRhiBuffer {
-    VkBuffer       buffer;
-    VkDeviceMemory memory;
-    size_t         size;
-};
-
-/* ---- 纹理结构 ---- */
-
-struct CeRhiTexture {
-    VkImage        image;
-    VkDeviceMemory memory;
-    VkImageView    view;
-    VkFormat       format;
-    int            width;
-    int            height;
-};
-
-/* ---- 着色器结构 ---- */
-
-struct CeRhiShader {
-    VkShaderModule module;
-    CeShaderStage  stage;
-};
-
-/* ---- 管线结构 ---- */
-
-struct CeRhiPipeline {
-    VkPipeline     pipeline;
-    VkPipelineLayout layout;
-};
+/* 内部结构体定义已移至 ce_rhi_vulkan.h */
 
 /* ---- 调试回调 ---- */
 
@@ -258,7 +177,7 @@ static VkResult create_debug_messenger(CeRhiDevice* dev) {
     return VK_ERROR_EXTENSION_NOT_PRESENT;
 }
 
-static uint32_t find_memory_type(CeRhiDevice* dev, uint32_t type_filter,
+uint32_t rhi_vk_find_memory_type(CeRhiDeviceVk* dev, uint32_t type_filter,
                                   VkMemoryPropertyFlags props) {
     VkPhysicalDeviceMemoryProperties mem_props;
     vkGetPhysicalDeviceMemoryProperties(dev->physical_device, &mem_props);
@@ -271,7 +190,7 @@ static uint32_t find_memory_type(CeRhiDevice* dev, uint32_t type_filter,
     return 0;
 }
 
-static VkShaderModule create_shader_module(CeRhiDevice* dev,
+VkShaderModule rhi_vk_create_shader_module(CeRhiDeviceVk* dev,
                                             const uint32_t* code, size_t size) {
     VkShaderModuleCreateInfo info = {0};
     info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -648,9 +567,9 @@ static VkResult create_framebuffers(CeRhiDevice* dev) {
 }
 
 static VkResult create_graphics_pipeline(CeRhiDevice* dev) {
-    VkShaderModule vert_module = create_shader_module(
+    VkShaderModule vert_module = rhi_vk_create_shader_module(
         dev, g_vert_shader_spv, sizeof(g_vert_shader_spv));
-    VkShaderModule frag_module = create_shader_module(
+    VkShaderModule frag_module = rhi_vk_create_shader_module(
         dev, g_frag_shader_spv, sizeof(g_frag_shader_spv));
 
     VkPipelineShaderStageCreateInfo vert_stage = {0};
@@ -842,7 +761,7 @@ CeRhiBuffer* rhi_create_buffer(CeRhiDevice* dev, const CeBufferDesc* desc) {
     VkMemoryAllocateInfo alloc_info = {0};
     alloc_info.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize  = mem_reqs.size;
-    alloc_info.memoryTypeIndex = find_memory_type(dev, mem_reqs.memoryTypeBits,
+    alloc_info.memoryTypeIndex = rhi_vk_find_memory_type(dev, mem_reqs.memoryTypeBits,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     vkAllocateMemory(dev->device, &alloc_info, NULL, &buf->memory);
@@ -867,31 +786,269 @@ void rhi_destroy_buffer(CeRhiDevice* dev, CeRhiBuffer* buffer) {
 }
 
 CeRhiTexture* rhi_create_texture(CeRhiDevice* dev, const CeTextureDesc* desc) {
-    (void)dev; (void)desc;
-    return NULL;  /* TODO */
+    CeRhiTextureVk* tex = (CeRhiTextureVk*)calloc(1, sizeof(CeRhiTextureVk));
+    if (!tex) return NULL;
+
+    /* 格式映射 */
+    VkFormat vk_format = VK_FORMAT_R8G8B8A8_SRGB;
+    switch (desc->format) {
+        case CE_TEX_RGBA8:  vk_format = VK_FORMAT_R8G8B8A8_SRGB; break;
+        case CE_TEX_RGB8:   vk_format = VK_FORMAT_R8G8B8_SRGB;   break;
+        case CE_TEX_DEPTH24: vk_format = VK_FORMAT_D32_SFLOAT;   break;
+    }
+    tex->format = vk_format;
+    tex->width  = desc->width;
+    tex->height = desc->height;
+
+    /* 1. 创建 VkImage */
+    VkImageCreateInfo image_info = {0};
+    image_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType     = VK_IMAGE_TYPE_2D;
+    image_info.format        = vk_format;
+    image_info.extent.width  = desc->width;
+    image_info.extent.height = desc->height;
+    image_info.extent.depth  = 1;
+    image_info.mipLevels     = 1;
+    image_info.arrayLayers   = 1;
+    image_info.samples       = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(dev->device, &image_info, NULL, &tex->image) != VK_SUCCESS) {
+        free(tex);
+        return NULL;
+    }
+
+    /* 2. 分配内存 */
+    VkMemoryRequirements mem_req;
+    vkGetImageMemoryRequirements(dev->device, tex->image, &mem_req);
+
+    VkMemoryAllocateInfo alloc_info = {0};
+    alloc_info.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize  = mem_req.size;
+    alloc_info.memoryTypeIndex = rhi_vk_find_memory_type(dev,
+        mem_req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(dev->device, &alloc_info, NULL, &tex->memory) != VK_SUCCESS) {
+        vkDestroyImage(dev->device, tex->image, NULL);
+        free(tex);
+        return NULL;
+    }
+    vkBindImageMemory(dev->device, tex->image, tex->memory, 0);
+
+    /* 3. 创建 ImageView */
+    VkImageViewCreateInfo view_info = {0};
+    view_info.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image                           = tex->image;
+    view_info.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format                          = vk_format;
+    view_info.subresourceRange.aspectMask     = (desc->format == CE_TEX_DEPTH24)
+        ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.baseMipLevel   = 0;
+    view_info.subresourceRange.levelCount     = 1;
+    view_info.subresourceRange.baseArrayLayer = 0;
+    view_info.subresourceRange.layerCount     = 1;
+
+    if (vkCreateImageView(dev->device, &view_info, NULL, &tex->view) != VK_SUCCESS) {
+        vkFreeMemory(dev->device, tex->memory, NULL);
+        vkDestroyImage(dev->device, tex->image, NULL);
+        free(tex);
+        return NULL;
+    }
+
+    CE_LOG_INFO("VULKAN", "Texture created: %dx%d", desc->width, desc->height);
+    return (CeRhiTexture*)tex;
 }
 
 void rhi_destroy_texture(CeRhiDevice* dev, CeRhiTexture* texture) {
-    (void)dev; (void)texture;
+    if (!texture) return;
+    CeRhiTextureVk* tex = (CeRhiTextureVk*)texture;
+    if (tex->view)   vkDestroyImageView(dev->device, tex->view, NULL);
+    if (tex->image)  vkDestroyImage(dev->device, tex->image, NULL);
+    if (tex->memory) vkFreeMemory(dev->device, tex->memory, NULL);
+    free(tex);
 }
 
 CeRhiShader* rhi_create_shader(CeRhiDevice* dev, CeShaderStage stage,
                                 const char* source) {
-    (void)dev; (void)stage; (void)source;
-    return NULL;  /* 使用内嵌 SPIR-V */
+    /* source 是 SPIR-V 二进制数据，前 4 字节为大小（uint32_t） */
+    CeRhiShaderVk* shader = (CeRhiShaderVk*)calloc(1, sizeof(CeRhiShaderVk));
+    if (!shader) return NULL;
+    shader->stage = stage;
+
+    const uint32_t* spirv = (const uint32_t*)(source + sizeof(uint32_t));
+    size_t spirv_size = *(const uint32_t*)source;
+
+    VkShaderModuleCreateInfo info = {0};
+    info.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    info.codeSize = spirv_size;
+    info.pCode    = spirv;
+
+    if (vkCreateShaderModule(dev->device, &info, NULL, &shader->module) != VK_SUCCESS) {
+        free(shader);
+        return NULL;
+    }
+
+    CE_LOG_INFO("VULKAN", "Shader created: stage=%d", stage);
+    return (CeRhiShader*)shader;
 }
 
 void rhi_destroy_shader(CeRhiDevice* dev, CeRhiShader* shader) {
-    (void)dev; (void)shader;
+    if (!shader) return;
+    CeRhiShaderVk* s = (CeRhiShaderVk*)shader;
+    if (s->module) vkDestroyShaderModule(dev->device, s->module, NULL);
+    free(s);
 }
 
 CeRhiPipeline* rhi_create_pipeline(CeRhiDevice* dev, const CePipelineDesc* desc) {
-    (void)dev; (void)desc;
-    return NULL;  /* 使用默认管线 */
+    if (!desc || !desc->vertex_shader || !desc->fragment_shader) return NULL;
+
+    CeRhiPipelineVk* pipeline = (CeRhiPipelineVk*)calloc(1, sizeof(CeRhiPipelineVk));
+    if (!pipeline) return NULL;
+
+    CeRhiShaderVk* vs = (CeRhiShaderVk*)desc->vertex_shader;
+    CeRhiShaderVk* fs = (CeRhiShaderVk*)desc->fragment_shader;
+
+    /* 着色器阶段 */
+    VkPipelineShaderStageCreateInfo stages[2];
+    stages[0] = (VkPipelineShaderStageCreateInfo){0};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vs->module;
+    stages[0].pName  = "main";
+
+    stages[1] = (VkPipelineShaderStageCreateInfo){0};
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fs->module;
+    stages[1].pName  = "main";
+
+    /* 顶点输入布局 */
+    VkVertexInputBindingDescription binding = {
+        .binding   = 0,
+        .stride    = desc->vertex_stride,
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+    };
+
+    VkVertexInputAttributeDescription* attrs = NULL;
+    if (desc->attr_count > 0) {
+        attrs = (VkVertexInputAttributeDescription*)malloc(
+            sizeof(VkVertexInputAttributeDescription) * desc->attr_count);
+        for (uint32_t i = 0; i < desc->attr_count; i++) {
+            attrs[i] = (VkVertexInputAttributeDescription){
+                .location = i,
+                .binding  = 0,
+                .format   = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset   = i * sizeof(float) * 3
+            };
+        }
+    }
+
+    VkPipelineVertexInputStateCreateInfo vertex_input = {0};
+    vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input.vertexBindingDescriptionCount   = 1;
+    vertex_input.pVertexBindingDescriptions      = &binding;
+    vertex_input.vertexAttributeDescriptionCount = desc->attr_count;
+    vertex_input.pVertexAttributeDescriptions    = attrs;
+
+    /* 输入装配 */
+    VkPipelineInputAssemblyStateCreateInfo input_assembly = {0};
+    input_assembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    /* 视口/裁剪 */
+    VkViewport viewport = {0, 0, (float)dev->width, (float)dev->height, 0.0f, 1.0f};
+    VkRect2D scissor = {{0, 0}, {dev->width, dev->height}};
+
+    VkPipelineViewportStateCreateInfo viewport_state = {0};
+    viewport_state.sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.pViewports    = &viewport;
+    viewport_state.scissorCount  = 1;
+    viewport_state.pScissors     = &scissor;
+
+    /* 光栅化 */
+    VkPipelineRasterizationStateCreateInfo rasterizer = {0};
+    rasterizer.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode    = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace   = VK_FRONT_FACE_CLOCKWISE;
+    rasterizer.lineWidth   = 1.0f;
+
+    /* 多重采样 */
+    VkPipelineMultisampleStateCreateInfo multisampling = {0};
+    multisampling.sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    /* 颜色混合 */
+    VkPipelineColorBlendAttachmentState color_blend = {0};
+    color_blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+                                 VK_COLOR_COMPONENT_G_BIT |
+                                 VK_COLOR_COMPONENT_B_BIT |
+                                 VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo color_blending = {0};
+    color_blending.sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blending.attachmentCount = 1;
+    color_blending.pAttachments    = &color_blend;
+
+    /* Push Constant 范围（用于 Uniform） */
+    VkPushConstantRange push_range = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset     = 0,
+        .size       = sizeof(CeMat4)
+    };
+
+    /* 管线布局 */
+    VkPipelineLayoutCreateInfo layout_info = {0};
+    layout_info.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.pushConstantRangeCount = 1;
+    layout_info.pPushConstantRanges    = &push_range;
+
+    if (vkCreatePipelineLayout(dev->device, &layout_info, NULL,
+                               &pipeline->layout) != VK_SUCCESS) {
+        free(attrs);
+        free(pipeline);
+        return NULL;
+    }
+
+    /* 创建管线 */
+    VkGraphicsPipelineCreateInfo pipeline_info = {0};
+    pipeline_info.sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.stageCount          = 2;
+    pipeline_info.pStages             = stages;
+    pipeline_info.pVertexInputState   = &vertex_input;
+    pipeline_info.pInputAssemblyState = &input_assembly;
+    pipeline_info.pViewportState      = &viewport_state;
+    pipeline_info.pRasterizationState = &rasterizer;
+    pipeline_info.pMultisampleState   = &multisampling;
+    pipeline_info.pColorBlendState    = &color_blending;
+    pipeline_info.layout              = pipeline->layout;
+    pipeline_info.renderPass          = dev->render_pass;
+    pipeline_info.subpass             = 0;
+
+    VkResult result = vkCreateGraphicsPipelines(dev->device, VK_NULL_HANDLE,
+                                                 1, &pipeline_info, NULL,
+                                                 &pipeline->pipeline);
+    free(attrs);
+
+    if (result != VK_SUCCESS) {
+        vkDestroyPipelineLayout(dev->device, pipeline->layout, NULL);
+        free(pipeline);
+        return NULL;
+    }
+
+    CE_LOG_INFO("VULKAN", "Pipeline created");
+    return (CeRhiPipeline*)pipeline;
 }
 
 void rhi_destroy_pipeline(CeRhiDevice* dev, CeRhiPipeline* pipeline) {
-    (void)dev; (void)pipeline;
+    if (!pipeline) return;
+    CeRhiPipelineVk* p = (CeRhiPipelineVk*)pipeline;
+    if (p->pipeline) vkDestroyPipeline(dev->device, p->pipeline, NULL);
+    if (p->layout)   vkDestroyPipelineLayout(dev->device, p->layout, NULL);
+    free(p);
 }
 
 /* ---- 渲染命令 ---- */
@@ -939,18 +1096,26 @@ void rhi_begin_frame(CeRhiDevice* dev, CeColor clear_color) {
 }
 
 void rhi_bind_pipeline(CeRhiDevice* dev, CeRhiPipeline* pipeline) {
-    (void)dev; (void)pipeline;
+    if (!pipeline) return;
+    CeRhiPipelineVk* p = (CeRhiPipelineVk*)pipeline;
+    VkCommandBuffer cmd = dev->command_buffers[dev->current_frame];
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p->pipeline);
 }
 
 void rhi_bind_buffer(CeRhiDevice* dev, CeRhiBuffer* buffer, uint32_t slot) {
     if (!buffer) return;
+    CeRhiBufferVk* buf = (CeRhiBufferVk*)buffer;
     VkCommandBuffer cmd = dev->command_buffers[dev->current_frame];
     VkDeviceSize offsets[] = {0};
-    vkCmdBindVertexBuffers(cmd, slot, 1, &buffer->buffer, offsets);
+    vkCmdBindVertexBuffers(cmd, slot, 1, &buf->buffer, offsets);
 }
 
 void rhi_set_uniform_mat4(CeRhiDevice* dev, const char* name, const CeMat4* mat) {
-    (void)dev; (void)name; (void)mat;
+    (void)name;
+    VkCommandBuffer cmd = dev->command_buffers[dev->current_frame];
+    vkCmdPushConstants(cmd, dev->pipeline_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT,
+                       0, sizeof(CeMat4), mat);
 }
 
 void rhi_draw(CeRhiDevice* dev, uint32_t vertex_count, uint32_t first_vertex) {

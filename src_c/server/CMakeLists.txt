@@ -1,0 +1,20 @@
+# ============================================================
+# ChaosEngine 服务端模块 — AOI + Cell
+# 仅在 CE_BUILD_SERVER 模式下编译
+# ============================================================
+
+add_library(engine_server STATIC
+    ce_aoi.c
+    ce_cell.c
+)
+
+target_include_directories(engine_server PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+
+target_link_libraries(engine_server PRIVATE engine_core)
+
+target_compile_options(engine_server PRIVATE
+    $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -std=c99>
+    $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -std=c99>
+)
