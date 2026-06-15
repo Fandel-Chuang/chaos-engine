@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChaosEngine</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --bg-secondary: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-orange: #d2991d;
+            --accent-red: #f85149;
+            --accent-purple: #a371f7;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        h2 {
+            font-size: 1.5em;
+            margin: 40px 0 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            color: var(--accent);
+        }
+
+        h3 {
+            font-size: 1.1em;
+            margin: 24px 0 12px;
+            color: var(--text);
+        }
+
+        p { margin: 12px 0; color: var(--text-secondary); }
+
+        .subtitle {
+            font-size: 1.1em;
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+        }
+
+        .badges {
+            display: flex;
+            gap: 8px;
+            margin: 16px 0 32px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        .badge-c { background: #555; color: #fff; }
+        .badge-cpp { background: #00599C; color: #fff; }
+        .badge-lua { background: #00007f; color: #fff; }
+        .badge-mit { background: var(--accent-green); color: #000; }
+        .badge-v { background: var(--accent-purple); color: #fff; }
+
+        .arch-diagram {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 24px;
+            margin: 24px 0;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.82em;
+            line-height: 1.8;
+            overflow-x: auto;
+            white-space: pre;
+            color: var(--text);
+        }
+
+        .arch-diagram .dim { color: var(--text-secondary); }
+        .arch-diagram .hl { color: var(--accent); }
+        .arch-diagram .gr { color: var(--accent-green); }
+        .arch-diagram .or { color: var(--accent-orange); }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+        }
+
+        th, td {
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            color: var(--accent);
+            font-weight: 600;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        td { color: var(--text-secondary); font-size: 0.95em; }
+
+        code {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.9em;
+            color: var(--accent-orange);
+        }
+
+        pre {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 16px 0;
+            overflow-x: auto;
+        }
+
+        pre code {
+            background: none;
+            border: none;
+            padding: 0;
+            color: var(--text);
+        }
+
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+            margin: 24px 0;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .card h4 {
+            color: var(--accent);
+            margin-bottom: 8px;
+            font-size: 1em;
+        }
+
+        .card p {
+            font-size: 0.9em;
+            margin: 4px 0;
+        }
+
+        .ref-table td:first-child {
+            color: var(--text);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .checklist {
+            list-style: none;
+            padding: 0;
+        }
+
+        .checklist li {
+            padding: 6px 0;
+            color: var(--text-secondary);
+        }
+
+        .checklist li::before {
+            content: "▸ ";
+            color: var(--accent-green);
+        }
+
+        .done::before { content: "✅ "; }
+        .todo::before { content: "⬜ "; }
+
+        footer {
+            margin-top: 60px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.85em;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .highlight-box {
+            background: linear-gradient(135deg, rgba(88,166,255,0.1), rgba(163,113,247,0.1));
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 24px 0;
+        }
+
+        .highlight-box p { margin: 4px 0; }
+    </style>
+</head>
+<body>
+
+<h1>ChaosEngine</h1>
+
+<p class="subtitle">
+    面向 3D 多人游戏的、客户端/服务器同构的、纯 C 内核 + Lua 脚本的轻量级开源游戏引擎。
+</p>
+
+<div class="badges">
+    <span class="badge badge-c">C99</span>
+    <span class="badge badge-cpp">C++17</span>
+    <span class="badge badge-lua">Lua</span>
+    <span class="badge badge-mit">MIT</span>
+    <span class="badge badge-v">v0.1.0</span>
+</div>
+
+<!-- 设计理念 -->
+<h2>🎯 设计理念</h2>
+
+<div class="card-grid">
+    <div class="card">
+        <h4>⚡ 极度简洁</h4>
+        <p>内核代码量最小化，每个模块只做一件事</p>
+    </div>
+    <div class="card">
+        <h4>🚀 高效执行</h4>
+        <p>纯 C 内核，Cache-Friendly 数据布局，无虚函数开销</p>
+    </div>
+    <div class="card">
+        <h4>🔄 同构逻辑</h4>
+        <p>同一份战斗代码，客户端帧同步 + 服务端状态同步</p>
+    </div>
+    <div class="card">
+        <h4>🧱 严格分层</h4>
+        <p>C 内核 → public_api → C++ 编辑器，三层隔离，单向依赖</p>
+    </div>
+    <div class="card">
+        <h4>🌍 全平台</h4>
+        <p>Windows / Linux / macOS / iOS / Android</p>
+    </div>
+    <div class="card">
+        <h4>🤖 AI 友好</h4>
+        <p>代码结构、命名、日志全部面向 AI 可解析设计</p>
+    </div>
+</div>
+
+<!-- 架构图 -->
+<h2>🏗️ 架构概览</h2>
+
+<div class="arch-diagram">
+<span class="dim">┌─────────────────────────────────────────────────────────┐</span>
+<span class="dim">│</span>                    <span class="hl">编辑器层 (C++17)</span>                      <span class="dim">│</span>
+<span class="dim">│</span>  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ <span class="dim">│</span>
+<span class="dim">│</span>  │   UI     │ │ Importer │ │  Editor  │ │ LogObserver │ <span class="dim">│</span>
+<span class="dim">│</span>  │ DearImGui│ │ 资源导入  │ │  Logic   │ │  第八模式   │ <span class="dim">│</span>
+<span class="dim">│</span>  └──────────┘ └──────────┘ └──────────┘ └────────────┘ <span class="dim">│</span>
+<span class="dim">├─────────────────────────────────────────────────────────┤</span>
+<span class="dim">│</span>                  <span class="gr">public_api (纯 C 头文件)</span>                 <span class="dim">│</span>
+<span class="dim">│</span>         <span class="or">↑ 编辑器唯一入口，extern "C" 调用 ↑</span>              <span class="dim">│</span>
+<span class="dim">├─────────────────────────────────────────────────────────┤</span>
+<span class="dim">│</span>                    <span class="hl">引擎内核 (纯 C99)</span>                      <span class="dim">│</span>
+<span class="dim">│</span>  ┌────────┐ ┌────────┐ ┌────────┐ ┌──────┐ ┌────────┐ <span class="dim">│</span>
+<span class="dim">│</span>  │  Core  │ │  ECS   │ │Render  │ │Network│ │Plugin  │ <span class="dim">│</span>
+<span class="dim">│</span>  │ 平台层  │ │ 实体系统│ │  RHI   │ │ 网络层 │ │插件系统│ <span class="dim">│</span>
+<span class="dim">│</span>  └────────┘ └────────┘ └────────┘ └──────┘ └────────┘ <span class="dim">│</span>
+<span class="dim">│</span>  ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────────────┐ <span class="dim">│</span>
+<span class="dim">│</span>  │  Math  │ │ Memory │ │  Log   │ │   Lua Runtime    │ <span class="dim">│</span>
+<span class="dim">│</span>  │ 数学库 │ │ 内存池 │ │ 日志   │ │   脚本运行时      │ <span class="dim">│</span>
+<span class="dim">│</span>  └────────┘ └────────┘ └────────┘ └──────────────────┘ <span class="dim">│</span>
+<span class="dim">├─────────────────────────────────────────────────────────┤</span>
+<span class="dim">│</span>                    <span class="gr">平台抽象层</span>                          <span class="dim">│</span>
+<span class="dim">│</span>   Windows / Linux / macOS / iOS / Android              <span class="dim">│</span>
+<span class="dim">└─────────────────────────────────────────────────────────┘</span>
+</div>
+
+<!-- 快速开始 -->
+<h2>🚀 快速开始</h2>
+
+<pre><code># 克隆
+git clone git@gitee.com:zhong-fangdao/chaos-engine.git
+cd chaos-engine
+
+# 编译 (需要 CMake 3.20+)
+mkdir build && cd build
+cmake .. -DCHAOS_BUILD_EDITOR=ON
+cmake --build .
+
+# 运行无头模式（服务器/测试）
+./bin/chaos_headless
+
+# 运行编辑器
+./bin/chaos_editor</code></pre>
+
+<!-- 编译选项 -->
+<h2>⚙️ 编译选项</h2>
+
+<table>
+    <tr><th>选项</th><th>默认值</th><th>说明</th></tr>
+    <tr><td><code>CHAOS_BUILD_EDITOR</code></td><td>ON</td><td>编译 C++ 编辑器</td></tr>
+    <tr><td><code>CHAOS_BUILD_TESTS</code></td><td>OFF</td><td>编译单元测试</td></tr>
+    <tr><td><code>CHAOS_BUILD_SAMPLES</code></td><td>OFF</td><td>编译示例程序</td></tr>
+</table>
+
+<!-- v0.1 模块 -->
+<h2>📦 v0.1 已实现模块</h2>
+
+<table>
+    <tr><th>模块</th><th>文件</th><th>说明</th></tr>
+    <tr><td><strong>Core</strong></td><td><code>ce_math.c/h</code>, <code>ce_memory.c/h</code></td><td>向量/矩阵/四元数数学库 + 内存池分配器</td></tr>
+    <tr><td><strong>ECS</strong></td><td><code>ce_ecs.c</code></td><td>Archetype 存储、实体/组件 CRUD、System 调度、Query 查询</td></tr>
+    <tr><td><strong>Log</strong></td><td><code>ce_log.c</code></td><td>环形缓冲区、回调机制、第八模式开关、文件输出</td></tr>
+    <tr><td><strong>Plugin</strong></td><td><code>ce_plugin.c</code></td><td>7 状态状态机 + 注册/加载/卸载/快照</td></tr>
+    <tr><td><strong>Render</strong></td><td><code>ce_rhi.h</code></td><td>RHI 抽象接口（预留 OpenGL/Vulkan/Metal）</td></tr>
+    <tr><td><strong>Engine</strong></td><td><code>ce_engine.c</code></td><td>生命周期管理、主循环、delta time</td></tr>
+    <tr><td><strong>public_api</strong></td><td>5 个头文件</td><td>纯 C 接口，编辑器唯一入口</td></tr>
+    <tr><td><strong>Editor</strong></td><td><code>editor_main.cpp</code></td><td>C++ 编辑器骨架，日志回调演示</td></tr>
+    <tr><td><strong>Build</strong></td><td>3 个 CMakeLists.txt</td><td>分目标编译，C/C++ 隔离</td></tr>
+</table>
+
+<!-- 参考引擎 -->
+<h2>📖 参考引擎</h2>
+
+<table class="ref-table">
+    <tr><th>引擎</th><th>借鉴内容</th></tr>
+    <tr><td>Skynet</td><td>Actor 并发模型、Lua 服务化架构、轻量级消息传递</td></tr>
+    <tr><td>KBEngine</td><td>Cell 空间划分、动态 AOI、多人同屏管理</td></tr>
+    <tr><td>Ant Engine</td><td>纯 ECS 架构、Archetype 存储、System 调度管线</td></tr>
+    <tr><td>Unreal Engine</td><td>Actor/Component 概念模型、属性复制系统、网络优先级</td></tr>
+</table>
+
+<!-- 路线图 -->
+<h2>🗺️ 开发路线图</h2>
+
+<div class="highlight-box">
+    <p><strong>v0.1 (MVP)</strong> — 项目骨架 + Core + ECS + RHI 接口 + 编辑器骨架 ✅</p>
+</div>
+
+<div class="highlight-box">
+    <p><strong>v0.2</strong> — 完整 RHI（纹理/Shader/材质）+ 3D 网格加载 + 帧同步协议</p>
+</div>
+
+<div class="highlight-box">
+    <p><strong>v0.3</strong> — 属性复制系统 + KCP + Cell 空间管理 + AOI + 插件动态加载</p>
+</div>
+
+<div class="highlight-box">
+    <p><strong>v0.5</strong> — Vulkan 后端 + 移动端适配 + 物理集成 + 完整编辑器</p>
+</div>
+
+<!-- 目录结构 -->
+<h2>📁 目录结构</h2>
+
+<pre><code>chaos-engine/
+├── src_c/                     # 引擎内核（纯 C99）
+│   ├── core/                  #   平台抽象、数学、内存
+│   ├── ecs/                   #   实体组件系统
+│   ├── render/                #   渲染抽象层 (RHI)
+│   ├── network/               #   网络层
+│   ├── plugin/                #   插件系统
+│   ├── script/                #   Lua 运行时绑定
+│   ├── log/                   #   日志系统
+│   ├── runtime/               #   引擎主循环 + 入口
+│   └── public_api/            #   对外纯 C 接口
+├── src_cpp/                   # 编辑器（C++17）
+│   ├── ui/                    #   Dear ImGui 界面
+│   ├── importer/              #   资源导入
+│   ├── editor_logic/          #   编辑逻辑
+│   └── log_observer/          #   第八模式观测面板
+├── src_lua/                   # Lua 脚本
+│   ├── server/                #   服务端脚本
+│   ├── client/                #   客户端脚本
+│   └── shared/                #   共享逻辑（同构核心）
+├── plugins/                   # 插件目录
+├── tests/                     # 测试
+├── ci/                        # CI 配置
+├── docs/                      # 文档
+│   └── spec/                  #   设计规格
+└── CMakeLists.txt             # 根构建文件</code></pre>
+
+<!-- 设计文档 -->
+<h2>📄 设计文档</h2>
+
+<p>
+    完整设计规格说明书：
+    <a href="docs/spec/chaos-engine-spec-v0.1.md">chaos-engine-spec-v0.1.md</a>
+</p>
+
+<p>包含：愿景定位、分层架构、客户端/服务器同构方案、ECS 设计、RHI 设计、网络层设计、插件系统、Lua 脚本层、编辑器架构、第八模式日志、Git/CI 模型、MVP 范围、开发路线图、参考引擎分析。</p>
+
+<footer>
+    <p>ChaosEngine v0.1.0 — MIT License</p>
+    <p>Made with ❤️ by zhongfangdao</p>
+</footer>
+
+</body>
+</html>
