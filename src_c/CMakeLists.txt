@@ -63,6 +63,20 @@ if(WIN32)
     target_link_libraries(engine_core PRIVATE winmm)
 elseif(UNIX AND NOT APPLE)
     target_link_libraries(engine_core PRIVATE m pthread dl ${LUA_LIB_DIR}/liblua5.4.so)
+
+    # io_uring 检测
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(LIBURING liburing)
+        if(LIBURING_FOUND)
+            target_compile_definitions(engine_core PRIVATE CHAOS_HAS_IO_URING)
+            target_include_directories(engine_core PRIVATE ${LIBURING_INCLUDE_DIRS})
+            target_link_libraries(engine_core PRIVATE ${LIBURING_LIBRARIES})
+            message(STATUS "io_uring: enabled (liburing ${LIBURING_VERSION})")
+        else()
+            message(STATUS "io_uring: disabled (liburing not found)")
+        endif()
+    endif()
 elseif(APPLE)
     target_link_libraries(engine_core PRIVATE
         "-framework Foundation"
@@ -113,6 +127,30 @@ else()
     target_link_libraries(chaos_client PRIVATE vulkan)
 endif()
 set_target_properties(chaos_client PROPERTIES LINKER_LANGUAGE C)
+
+# ============================================================
+# 网络客户端测试
+# ============================================================
+add_executable(chaos_net_client
+    runtime/ce_net_client_main.c
+)
+target_include_directories(chaos_net_client PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(chaos_net_client PRIVATE engine_core)
+set_target_properties(chaos_net_client PROPERTIES LINKER_LANGUAGE C)
+
+# ============================================================
+# io_uring 异步 Echo 服务器
+# ============================================================
+add_executable(chaos_async_echo
+    runtime/ce_async_echo_main.c
+)
+target_include_directories(chaos_async_echo PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(chaos_async_echo PRIVATE engine_core)
+set_target_properties(chaos_async_echo PROPERTIES LINKER_LANGUAGE C)
 
 # ============================================================
 # 服务端模块 (AOI + Cell)
