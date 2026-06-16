@@ -527,6 +527,10 @@
                     </div>
                     <div class="layer-body">
                         <div class="module module-lua">
+                            <div class="mod-name">Gateway</div>
+                            <div class="mod-detail">TCP/KCP/WebSocket 接入</div>
+                        </div>
+                        <div class="module module-lua">
                             <div class="mod-name">Admin Web</div>
                             <div class="mod-detail">Lapis HTTP 管理后台</div>
                         </div>
@@ -579,6 +583,58 @@
             </div>
 
             <div class="topo-card">
+
+                <!-- 客户端 -->
+                <div class="machine">
+                    <div class="machine-label">📱 客户端</div>
+                    <div class="proc-row">
+                        <div class="proc">
+                            <div class="proc-name">🎮 Game Client</div>
+                            <div class="proc-role">TCP / KCP / WebSocket</div>
+                            <div class="proc-port">→ Gateway :9000 (TCP)</div>
+                            <div class="proc-port">→ Gateway :9001 (KCP)</div>
+                            <div class="proc-port">→ Gateway :9002 (WebSocket)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 连接箭头：客户端 → Gateway -->
+                <div class="flow-arrows">
+                    <div class="flow-item">
+                        <span class="arrow-icon">→</span>
+                        <span>Game Client</span>
+                        <span class="arrow-icon">→</span>
+                        <span>Gateway</span>
+                        <span class="arrow-label">TCP :9000 / KCP :9001 / WS :9002</span>
+                        <span>多协议接入 + 连接管理 + 心跳</span>
+                    </div>
+                </div>
+
+                <!-- Gateway 机器 -->
+                <div class="machine">
+                    <div class="machine-label">🖥️ 机器 G — Gateway</div>
+                    <div class="proc-row">
+                        <div class="proc primary">
+                            <div class="proc-name">🚪 Lua Gateway</div>
+                            <div class="proc-role">协议适配 + 消息路由 + 连接池</div>
+                            <div class="proc-port">:9000 TCP 接入</div>
+                            <div class="proc-port">:9001 KCP 接入</div>
+                            <div class="proc-port">:9002 WebSocket 接入</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 连接箭头：Gateway → Game -->
+                <div class="flow-arrows">
+                    <div class="flow-item">
+                        <span class="arrow-icon">→</span>
+                        <span>Gateway</span>
+                        <span class="arrow-icon">→</span>
+                        <span>Game A</span>
+                        <span class="arrow-label">直连 TCP</span>
+                        <span>消息转发（不经过 Router）</span>
+                    </div>
+                </div>
 
                 <!-- 机器 A -->
                 <div class="machine">
@@ -704,6 +760,40 @@
     <div class="changes-grid">
 
         <div class="change-card">
+            <div class="change-id">add-gateway <span style="color:var(--green);">✅</span></div>
+            <div class="change-title">Gateway 网络接入层</div>
+            <div class="change-desc">TCP/KCP/WebSocket 多协议接入、连接池、心跳管理、消息路由；纯 Lua 实现 + C KCP 绑定</div>
+            <div class="change-tags">
+                <span class="change-tag v03">v0.3</span>
+                <span class="change-tag">Gateway</span>
+                <span class="change-tag">Lua</span>
+            </div>
+        </div>
+
+        <div class="change-card">
+            <div class="change-id">add-router-cluster</div>
+            <div class="change-title">Router 集群：服务发现 + 跨服路由</div>
+            <div class="change-desc">服务注册/发现、Game 进程间消息路由、全球多区域跨大区路由、共享网络库抽离</div>
+            <div class="change-tags">
+                <span class="change-tag v03">v0.3</span>
+                <span class="change-tag">Router</span>
+                <span class="change-tag">Cluster</span>
+            </div>
+        </div>
+
+        <div class="change-card">
+            <div class="change-id">add-game-cluster-save <span style="color:var(--green);">✅</span></div>
+            <div class="change-title">Game 实时备份 + DBProxy 主备 + 存档</div>
+            <div class="change-desc">进程间状态同步、DBProxy 主备切换、定时/手动存档、玩家登录加载</div>
+            <div class="change-tags">
+                <span class="change-tag v03">v0.3</span>
+                <span class="change-tag">Sync</span>
+                <span class="change-tag">Save</span>
+                <span class="change-tag">DBProxy</span>
+            </div>
+        </div>
+
+        <div class="change-card">
             <div class="change-id">render-vulkan-complete</div>
             <div class="change-title">Vulkan RHI 完整化 + Server AOI/Cell</div>
             <div class="change-desc">补全 Vulkan 后端纹理/着色器/管线；实现十字链表 AOI 和 Cell 大地图管理</div>
@@ -733,18 +823,6 @@
                 <span class="change-tag v02">v0.2</span>
                 <span class="change-tag tech">Network</span>
                 <span class="change-tag tech">eBPF</span>
-            </div>
-        </div>
-
-        <div class="change-card">
-            <div class="change-id">add-game-cluster-save</div>
-            <div class="change-title">Game 实时备份 + DBProxy 主备 + 存档</div>
-            <div class="change-desc">进程间状态同步、DBProxy 主备切换、定时/手动存档、玩家登录加载</div>
-            <div class="change-tags">
-                <span class="change-tag v03">v0.3</span>
-                <span class="change-tag">Sync</span>
-                <span class="change-tag">Save</span>
-                <span class="change-tag">DBProxy</span>
             </div>
         </div>
 
