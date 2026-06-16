@@ -16,6 +16,9 @@
 #include "server/ce_cell.h"
 #include "server/ce_aoi.h"
 #include "admin_ipc/ce_admin_ipc.h"
+#include "sync/ce_sync.h"
+#include "save/ce_save.h"
+#include "dbproxy/ce_dbproxy.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,12 +62,29 @@ int main(int argc, char** argv) {
     const char* admin_sock_path = DEFAULT_ADMIN_SOCK;
     CeAdminIpc* admin_ipc = NULL;
 
+    /* DBProxy / Sync / Save 配置（可通过命令行覆盖） */
+    const char* dbproxy_host = "192.168.1.100";
+    int         dbproxy_port = 9003;
+    const char* backup_host  = "127.0.0.1";
+    int         backup_port  = 9003;
+    int         save_interval = 300;
+
     /* 解析命令行参数 */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--admin") == 0) {
             admin_enabled = 1;
         } else if (strcmp(argv[i], "--admin-sock") == 0 && i + 1 < argc) {
             admin_sock_path = argv[++i];
+        } else if (strcmp(argv[i], "--dbproxy-host") == 0 && i + 1 < argc) {
+            dbproxy_host = argv[++i];
+        } else if (strcmp(argv[i], "--dbproxy-port") == 0 && i + 1 < argc) {
+            dbproxy_port = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--backup-host") == 0 && i + 1 < argc) {
+            backup_host = argv[++i];
+        } else if (strcmp(argv[i], "--backup-port") == 0 && i + 1 < argc) {
+            backup_port = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--save-interval") == 0 && i + 1 < argc) {
+            save_interval = atoi(argv[++i]);
         }
     }
 
@@ -102,6 +122,47 @@ int main(int argc, char** argv) {
         return 1;
     }
     printf("[Server] Cell manager initialized: 10000x10000 world, 500x500 cells\n");
+
+    /* ---- DBProxy 连接初始化 ---- */
+    CeDbproxyConfig dbproxy_cfg = {
+        .primary_host = dbproxy_host,
+        .primary_port = dbproxy_port,
+        .backup_host  = backup_host,
+        .backup_port  = backup_port
+    };
+    CeDbproxyContext* dbproxy = ce_dbproxy_connect(&dbproxy_cfg);
+    if (!dbproxy) {
+        fprintf(stderr, "[WARN] DBProxy connection failed, continuing without DBProxy\n");
+    } else {
+        printf("[Server] DBProxy connected: %s\n", ce_dbproxy_current_endpoint(dbproxy));
+    }
+
+    /* ---- Sync 初始化 ---- */
+    CeSyncConfig sync_cfg = {
+        .dbproxy_host = dbproxy_host,
+        .dbproxy_port = 9001,
+        .backup_host  = backup_host,
+        .backup_port  = 9001
+    };
+    CeSyncContext* sync = ce_sync_init(&sync_cfg);
+    if (!sync) {
+        fprintf(stderr, "[WARN] Sync init failed, continuing without sync\n");
+    } else {
+        printf("[Server] Sync initialized: %s:%d\n", dbproxy_host, 9001);
+    }
+
+    /* ---- Save 初始化 ---- */
+    CeSaveConfig save_cfg = {
+        .save_interval_sec = save_interval,
+        .full_save_every_n = 6
+    };
+    CeSaveContext* save = ce_save_init(dbproxy, &save_cfg);
+    if (!save) {
+        fprintf(stderr, "[WARN] Save init failed, continuing without save\n");
+    } else {
+        printf("[Server] Save initialized: interval=%ds, full_every=%d\n",
+               save_interval, 6);
+    }
 
     /* 启动 Admin IPC（如果 --admin 传入） */
     if (admin_enabled) {
@@ -295,6 +356,21 @@ int main(int argc, char** argv) {
             if (elapsed_ns >= interval_ns) {
                 ce_update();
                 ce_cell_update();
+
+                /* Sync / Save / DBProxy 每 tick 处理 */
+                if (sync) {
+                    ce_sync_heartbeat(sync);
+                    CeSyncResponse sync_resp;
+                    ce_sync_poll(sync, &sync_resp);
+                }
+                if (save) {
+                    ce_save_tick(save);
+                }
+                if (dbproxy) {
+                    CeDbproxyResponse db_resp;
+                    ce_dbproxy_recv(dbproxy, &db_resp);
+                }
+
                 last_tick = now;
             }
         }
@@ -325,6 +401,11 @@ int main(int argc, char** argv) {
         ce_admin_ipc_stop(admin_ipc);
     }
 
+    /* 关闭 Sync / Save / DBProxy */
+    if (save) ce_save_shutdown(save);
+    if (sync) ce_sync_shutdown(sync);
+    if (dbproxy) ce_dbproxy_disconnect(dbproxy);
+
     ce_shutdown();
 
     printf("Echo server shut down cleanly.\n");
@@ -341,12 +422,29 @@ int main(int argc, char** argv) {
     const char* admin_sock_path = DEFAULT_ADMIN_SOCK;
     CeAdminIpc* admin_ipc = NULL;
 
+    /* DBProxy / Sync / Save 配置（可通过命令行覆盖） */
+    const char* dbproxy_host = "192.168.1.100";
+    int         dbproxy_port = 9003;
+    const char* backup_host  = "127.0.0.1";
+    int         backup_port  = 9003;
+    int         save_interval = 300;
+
     /* 解析命令行参数 */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--admin") == 0) {
             admin_enabled = 1;
         } else if (strcmp(argv[i], "--admin-sock") == 0 && i + 1 < argc) {
             admin_sock_path = argv[++i];
+        } else if (strcmp(argv[i], "--dbproxy-host") == 0 && i + 1 < argc) {
+            dbproxy_host = argv[++i];
+        } else if (strcmp(argv[i], "--dbproxy-port") == 0 && i + 1 < argc) {
+            dbproxy_port = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--backup-host") == 0 && i + 1 < argc) {
+            backup_host = argv[++i];
+        } else if (strcmp(argv[i], "--backup-port") == 0 && i + 1 < argc) {
+            backup_port = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--save-interval") == 0 && i + 1 < argc) {
+            save_interval = atoi(argv[++i]);
         }
     }
 
@@ -384,6 +482,47 @@ int main(int argc, char** argv) {
         return 1;
     }
     printf("[Server] Cell manager initialized: 10000x10000 world, 500x500 cells\n");
+
+    /* ---- DBProxy 连接初始化 ---- */
+    CeDbproxyConfig dbproxy_cfg = {
+        .primary_host = dbproxy_host,
+        .primary_port = dbproxy_port,
+        .backup_host  = backup_host,
+        .backup_port  = backup_port
+    };
+    CeDbproxyContext* dbproxy = ce_dbproxy_connect(&dbproxy_cfg);
+    if (!dbproxy) {
+        fprintf(stderr, "[WARN] DBProxy connection failed, continuing without DBProxy\n");
+    } else {
+        printf("[Server] DBProxy connected: %s\n", ce_dbproxy_current_endpoint(dbproxy));
+    }
+
+    /* ---- Sync 初始化 ---- */
+    CeSyncConfig sync_cfg = {
+        .dbproxy_host = dbproxy_host,
+        .dbproxy_port = 9001,
+        .backup_host  = backup_host,
+        .backup_port  = 9001
+    };
+    CeSyncContext* sync = ce_sync_init(&sync_cfg);
+    if (!sync) {
+        fprintf(stderr, "[WARN] Sync init failed, continuing without sync\n");
+    } else {
+        printf("[Server] Sync initialized: %s:%d\n", dbproxy_host, 9001);
+    }
+
+    /* ---- Save 初始化 ---- */
+    CeSaveConfig save_cfg = {
+        .save_interval_sec = save_interval,
+        .full_save_every_n = 6
+    };
+    CeSaveContext* save = ce_save_init(dbproxy, &save_cfg);
+    if (!save) {
+        fprintf(stderr, "[WARN] Save init failed, continuing without save\n");
+    } else {
+        printf("[Server] Save initialized: interval=%ds, full_every=%d\n",
+               save_interval, 6);
+    }
 
     /* 启动 Admin IPC（如果 --admin 传入） */
     if (admin_enabled) {
@@ -513,6 +652,20 @@ int main(int argc, char** argv) {
         ce_update();
         ce_cell_update();
 
+        /* Sync / Save / DBProxy 每 tick 处理 */
+        if (sync) {
+            ce_sync_heartbeat(sync);
+            CeSyncResponse sync_resp;
+            ce_sync_poll(sync, &sync_resp);
+        }
+        if (save) {
+            ce_save_tick(save);
+        }
+        if (dbproxy) {
+            CeDbproxyResponse db_resp;
+            ce_dbproxy_recv(dbproxy, &db_resp);
+        }
+
         /* 限速：睡眠到下一个 tick */
         {
             struct timespec target;
@@ -552,6 +705,11 @@ int main(int argc, char** argv) {
     if (admin_ipc) {
         ce_admin_ipc_stop(admin_ipc);
     }
+
+    /* 关闭 Sync / Save / DBProxy */
+    if (save) ce_save_shutdown(save);
+    if (sync) ce_sync_shutdown(sync);
+    if (dbproxy) ce_dbproxy_disconnect(dbproxy);
 
     ce_shutdown();
 
