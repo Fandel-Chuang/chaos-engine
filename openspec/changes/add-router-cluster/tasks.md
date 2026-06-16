@@ -6,21 +6,21 @@
 
 ## Phase 1: ce_net_base 共享网络库 + 跨区路由基础（C 内核）
 
-- [ ] 1.1 创建 `src_c/network/ce_net_base.h`：定义 `CeNetBaseConn` 连接句柄、`CeNetBasePool` 连接池句柄、消息类型枚举、`ce_net_base_connect/disconnect/reconnect` 连接管理接口、`ce_net_base_send/recv` 消息收发接口、`ce_net_base_heartbeat_start/stop/is_alive` 心跳接口、`ce_net_base_pool_create/acquire/release` 连接池接口、`ce_net_base_pack/unpack` 协议编解码接口
-- [ ] 1.2 实现 `ce_net_base_connect()`：建立 TCP 连接（非阻塞 socket + io_uring/posix 异步 I/O），支持连接超时配置（默认 5s），返回 `CeNetBaseConn` 句柄
-- [ ] 1.3 实现二进制协议编解码（`ce_net_base_pack/unpack`）：长度前缀（4 字节大端）+ 消息类型（2 字节大端）+ 变长 payload；复用 `ce_dbproxy` 的变长整数编码实现
-- [ ] 1.4 实现 `ce_net_base_send/recv`：基于协议编解码的消息收发，支持非阻塞模式，内部处理 TCP 粘包/拆包（长度前缀分隔）
-- [ ] 1.5 实现心跳检测：`ce_net_base_heartbeat_start` 启动定时心跳（可配置间隔，默认 1s），`ce_net_base_is_alive` 检查连接是否存活（连续 3 次超时判定断开），心跳回调通知上层
-- [ ] 1.6 实现连接池（`CeNetBasePool`）：最小/最大连接数配置，连接复用（acquire/release），空闲连接回收（默认 60s），连接健康检查
-- [ ] 1.7 实现自动重连（`ce_net_base_reconnect`）：指数退避策略（1s, 2s, 4s, 8s, 最大 30s），最大重试次数可配置
-- [ ] 1.8 更新 `src_c/network/CMakeLists.txt`：添加 `ce_net_base.c` 源文件，编译为 `engine_net_base` 静态库，链接 `engine_core`
-- [ ] 1.9 编写 ce_net_base 单元测试：连接建立/断开、消息收发（粘包/拆包）、心跳超时检测、连接池获取/归还、自动重连
-- [ ] 1.10 定义跨区消息格式：在 `ce_net_base.h` 中定义跨区消息头结构（length + type + source_region + target_region + payload），定义大区标识枚举（asia-east=0x0001, eu-west=0x0002, us-west=0x0003, us-east=0x0004, sa-east=0x0005）
-- [ ] 1.11 实现跨区 TCP 长连接框架：`ce_net_base_cross_region_connect(region_id, router_list)` 建立到目标大区 Router 的 TCP 长连接，`ce_net_base_cross_region_send(conn, source_region, target_region, msg)` 发送跨区消息，`ce_net_base_cross_region_recv(conn, ...)` 接收跨区消息
-- [ ] 1.12 实现全球 Router 网格连接管理：维护跨区连接表 `{target_region → CeNetBaseConn}`，支持全互联拓扑自动建立连接，新增大区时动态添加连接
-- [ ] 1.13 Gateway 网络层迁移：替换 Gateway 内联的 socket 操作、消息编解码、心跳检测为 `ce_net_base` 调用（仅替换网络底层实现，Gateway 保持直连 Game，不引入路由功能）
-- [ ] 1.14 更新 Gateway 的 CMakeLists.txt：链接 `engine_net_base` 替代内联网络代码
-- [ ] 1.15 回归测试：验证 Gateway 迁移后 TCP/KCP/WebSocket 接入、连接管理、消息转发（直连 Game）功能不受影响
+- [x] 1.1 创建 `src_c/network/ce_net_base.h`：定义 `CeNetBaseConn` 连接句柄、`CeNetBasePool` 连接池句柄、消息类型枚举、`ce_net_base_connect/disconnect/reconnect` 连接管理接口、`ce_net_base_send/recv` 消息收发接口、`ce_net_base_heartbeat_start/stop/is_alive` 心跳接口、`ce_net_base_pool_create/acquire/release` 连接池接口、`ce_net_base_pack/unpack` 协议编解码接口
+- [x] 1.2 实现 `ce_net_base_connect()`：建立 TCP 连接（非阻塞 socket + io_uring/posix 异步 I/O），支持连接超时配置（默认 5s），返回 `CeNetBaseConn` 句柄
+- [x] 1.3 实现二进制协议编解码（`ce_net_base_pack/unpack`）：长度前缀（4 字节大端）+ 消息类型（2 字节大端）+ 变长 payload；复用 `ce_dbproxy` 的变长整数编码实现
+- [x] 1.4 实现 `ce_net_base_send/recv`：基于协议编解码的消息收发，支持非阻塞模式，内部处理 TCP 粘包/拆包（长度前缀分隔）
+- [x] 1.5 实现心跳检测：`ce_net_base_heartbeat_start` 启动定时心跳（可配置间隔，默认 1s），`ce_net_base_is_alive` 检查连接是否存活（连续 3 次超时判定断开），心跳回调通知上层
+- [x] 1.6 实现连接池（`CeNetBasePool`）：最小/最大连接数配置，连接复用（acquire/release），空闲连接回收（默认 60s），连接健康检查
+- [x] 1.7 实现自动重连（`ce_net_base_reconnect`）：指数退避策略（1s, 2s, 4s, 8s, 最大 30s），最大重试次数可配置
+- [x] 1.8 更新 `src_c/network/CMakeLists.txt`：添加 `ce_net_base.c` 源文件，编译为 `engine_net_base` 静态库，链接 `engine_core`
+- [x] 1.9 编写 ce_net_base 单元测试：连接建立/断开、消息收发（粘包/拆包）、心跳超时检测、连接池获取/归还、自动重连
+- [x] 1.10 定义跨区消息格式：在 `ce_net_base.h` 中定义跨区消息头结构（length + type + source_region + target_region + payload），定义大区标识枚举（asia-east=0x0001, eu-west=0x0002, us-west=0x0003, us-east=0x0004, sa-east=0x0005）
+- [x] 1.11 实现跨区 TCP 长连接框架：`ce_net_base_cross_region_connect(region_id, router_list)` 建立到目标大区 Router 的 TCP 长连接，`ce_net_base_cross_region_send(conn, source_region, target_region, msg)` 发送跨区消息，`ce_net_base_cross_region_recv(conn, ...)` 接收跨区消息
+- [x] 1.12 实现全球 Router 网格连接管理：维护跨区连接表 `{target_region → CeNetBaseConn}`，支持全互联拓扑自动建立连接，新增大区时动态添加连接
+- [x] 1.13 Gateway 网络层迁移：替换 Gateway 内联的 socket 操作、消息编解码、心跳检测为 `ce_net_base` 调用（仅替换网络底层实现，Gateway 保持直连 Game，不引入路由功能）
+- [x] 1.14 更新 Gateway 的 CMakeLists.txt：链接 `engine_net_base` 替代内联网络代码
+- [x] 1.15 回归测试：验证 Gateway 迁移后 TCP/KCP/WebSocket 接入、连接管理、消息转发（直连 Game）功能不受影响
 
 ---
 

@@ -10,6 +10,7 @@ local json = require("cjson")
 local ipc = require("admin.ipc_client")
 local config = require("admin.config")
 local dashboard_html = require("admin.dashboard_html")
+local ws_handler = require("admin.ws_handler")
 
 local app = lapis.Application()
 
@@ -105,6 +106,45 @@ end)
 
 app:get("/api/health", function(self)
     return ipc_response("health")
+end)
+
+-- ============================================================
+-- WebSocket Route (Phase 6.1)
+-- ============================================================
+app:get("/ws", function(self)
+    -- Check if this is a WebSocket upgrade request
+    local upgrade = ngx.var.http_upgrade or ""
+    if upgrade:lower() ~= "websocket" then
+        return {
+            status = 400,
+            json = {
+                ok = false,
+                error = "WebSocket upgrade required",
+                timestamp = os.time()
+            }
+        }
+    end
+
+    -- Use Lapis/nginx WebSocket support
+    local ws, err = ngx.req.socket and ngx.req.socket(true)
+    if not ws then
+        -- Fallback: try Lapis websocket module
+        local ok, ws_mod = pcall(require, "lapis.websocket")
+        if ok and ws_mod then
+            return ws_mod.serve(ws_handler)
+        end
+        return {
+            status = 500,
+            json = {
+                ok = false,
+                error = "WebSocket not supported: " .. tostring(err),
+                timestamp = os.time()
+            }
+        }
+    end
+
+    -- Handle WebSocket connection
+    ws_handler.handle(ws)
 end)
 
 return app

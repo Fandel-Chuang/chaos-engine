@@ -31,8 +31,8 @@
 - [x] 2.2 实现 `ce_async_has_zcrx`：通过检测 `IORING_FEAT_RECVSEND_BUNDLE` 判断零拷贝接收支持
 - [x] 2.3 实现 `ce_async_backend_name`：io_uring 后端返回 `"io_uring"`，POSIX 后端返回 `"posix"`
 - [x] 2.4 批量提交优化：`ce_async_submit` 一次性提交所有待处理 SQE，减少系统调用次数
-- [ ] 2.5 性能基准测试：对比 io_uring vs POSIX 的 QPS、延迟（P50/P90/P99）、CPU 利用率
-- [ ] 2.6 多连接并发测试：验证 io_uring 单线程处理 1000+ 并发连接的能力
+- [x] 2.5 性能基准测试：对比 io_uring vs POSIX 的 QPS、延迟（P50/P90/P99）、CPU 利用率
+- [x] 2.6 多连接并发测试：验证 io_uring 单线程处理 1000+ 并发连接的能力
 
 ---
 
@@ -102,8 +102,8 @@
 
 ---
 
-**总进度：46/51 已完成（90%）**
+**总进度：48/51 已完成（94%）**
 
-**已完成（Phase 1-3 + Phase 5 集成 + Phase 7 测试）**：io_uring 基础集成（16 项）、io_uring 高级特性（4 项）、eBPF 可观测性（18 项）、服务端主循环集成（2 项）、单元/集成/压力测试（7 项）。
+**已完成（Phase 1-3 + Phase 5 集成 + Phase 7 测试 + 性能基准）**：io_uring 基础集成（16 项）、io_uring 高级特性（6 项）、eBPF 可观测性（18 项）、服务端主循环集成（2 项）、单元/集成/压力测试（7 项）、性能基准测试（2 项）。
 
 **待完成**：性能测试报告（1 项）、eBPF 网络优化（6 项，Phase 4 延后）、跨平台扩展（4 项）。

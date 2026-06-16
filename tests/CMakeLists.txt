@@ -220,3 +220,67 @@ target_include_directories(test_async_io_posix PRIVATE
 target_link_libraries(test_async_io_posix PRIVATE engine_core_posix_test)
 set_target_properties(test_async_io_posix PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME async_io_posix COMMAND test_async_io_posix WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ============================================================
+# Phase 5.1: Admin IPC 单元测试
+# ============================================================
+add_executable(test_admin_ipc unit/test_admin_ipc.c)
+target_include_directories(test_admin_ipc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+set_target_properties(test_admin_ipc PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME admin_ipc COMMAND test_admin_ipc)
+
+# ============================================================
+# Phase 5.2: Admin IPC 端到端集成测试
+# ============================================================
+add_executable(test_admin_e2e unit/test_admin_e2e.c)
+target_include_directories(test_admin_e2e PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_admin_e2e PRIVATE pthread)
+set_target_properties(test_admin_e2e PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME admin_e2e COMMAND test_admin_e2e)
+
+# ============================================================
+# Phase 5.3: Admin IPC 异常场景测试
+# ============================================================
+add_executable(test_admin_errors unit/test_admin_errors.c)
+target_include_directories(test_admin_errors PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_admin_errors PRIVATE pthread)
+set_target_properties(test_admin_errors PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME admin_errors COMMAND test_admin_errors)
+
+# ============================================================
+# Phase 5.4: Admin IPC 性能基准测试
+# ============================================================
+add_executable(test_admin_perf unit/test_admin_perf.c)
+target_include_directories(test_admin_perf PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_admin_perf PRIVATE pthread)
+set_target_properties(test_admin_perf PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME admin_perf COMMAND test_admin_perf)
+
+# ============================================================
+# Phase 1: ce_net_base 共享网络库单元测试
+# ============================================================
+add_executable(test_net_base unit/test_net_base.c)
+target_include_directories(test_net_base PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_net_base PRIVATE engine_core)
+set_target_properties(test_net_base PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME net_base COMMAND test_net_base WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ============================================================
+# 性能基准测试 (Phase 2.5/2.6)
+# ============================================================
+add_subdirectory(bench)

@@ -208,8 +208,39 @@ int ce_async_wait(CeAsyncContext* ctx, int min_events, int timeout_ms) {
         }
     }
 
-    /* 清除已处理的 ops */
-    ctx->op_count = 0;
+    /* 清除已处理的 ops，保留未就绪的 */
+    /* 压缩 ops 数组：保留未就绪的操作 */
+    int new_count = 0;
+    for (int i = 0; i < ctx->op_count; i++) {
+        CeAsyncOp* op = &ctx->ops[i];
+        if (!op->submitted) continue;
+
+        int processed = 0;
+        switch (op->type) {
+        case CE_ASYNC_OP_ACCEPT:
+            processed = FD_ISSET(op->fd, &read_fds);
+            break;
+        case CE_ASYNC_OP_RECV:
+        case CE_ASYNC_OP_READ:
+            processed = FD_ISSET(op->fd, &read_fds);
+            break;
+        case CE_ASYNC_OP_SEND:
+            processed = FD_ISSET(op->fd, &write_fds);
+            break;
+        case CE_ASYNC_OP_CLOSE:
+            processed = 1;  /* close 总是处理 */
+            break;
+        }
+
+        if (!processed) {
+            /* 保留未就绪的操作 */
+            if (new_count != i) {
+                ctx->ops[new_count] = ctx->ops[i];
+            }
+            new_count++;
+        }
+    }
+    ctx->op_count = new_count;
     ctx->event_count = count;
     return count;
 }

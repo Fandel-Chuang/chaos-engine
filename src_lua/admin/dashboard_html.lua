@@ -794,28 +794,44 @@ function animateValue(el, newVal, formatter) {
 }
 
 // ============================================================
-// WebSocket Connection
+// WebSocket Connection (Phase 6.4-6.5: Enhanced Client + Auto-Reconnect)
 // ============================================================
 var ws = null;
 var reconnectTimer = null;
+var reconnectAttempt = 0;
+var maxReconnectDelay = 30000;  // Max 30 seconds
+var baseReconnectDelay = 1000;  // Start at 1 second
+var heartbeatTimer = null;
+var heartbeatInterval = 15000;  // 15 seconds ping
 var logBuffer = [];
 var MAX_LOG_LINES = 200;
+var wsExplicitClose = false;    // Track intentional close vs disconnect
 
 function connectWebSocket() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return; // Already connected or connecting
+    }
+
     var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     var wsUrl = protocol + '//' + location.host + '/ws';
 
     try {
         ws = new WebSocket(wsUrl);
     } catch(e) {
+        console.error('WebSocket construction failed:', e);
         setConnectionStatus(false);
         scheduleReconnect();
         return;
     }
 
     ws.onopen = function() {
+        console.log('WebSocket connected (attempt ' + (reconnectAttempt + 1) + ')');
+        reconnectAttempt = 0;  // Reset on successful connection
         setConnectionStatus(true);
-        console.log('WebSocket connected');
+        startHeartbeat();
+
+        // Pause HTTP polling since WebSocket is active
+        stopPolling();
     };
 
     ws.onmessage = function(event) {
@@ -827,27 +843,78 @@ function connectWebSocket() {
         }
     };
 
-    ws.onclose = function() {
-        setConnectionStatus(false);
+    ws.onclose = function(event) {
+        console.log('WebSocket closed: code=' + event.code + ' reason=' + event.reason);
+        stopHeartbeat();
         ws = null;
-        scheduleReconnect();
+        setConnectionStatus(false);
+
+        if (!wsExplicitClose) {
+            scheduleReconnect();
+            // Resume HTTP polling as fallback
+            startPolling();
+        }
     };
 
     ws.onerror = function(err) {
         console.error('WebSocket error:', err);
-        ws = null;
-        setConnectionStatus(false);
-        scheduleReconnect();
+        // onclose will be called after onerror
     };
+}
+
+function disconnectWebSocket() {
+    wsExplicitClose = true;
+    stopHeartbeat();
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    if (ws) {
+        ws.close(1000, 'Client disconnect');
+        ws = null;
+    }
+    setConnectionStatus(false);
+    startPolling(); // Resume HTTP polling
 }
 
 function scheduleReconnect() {
     if (reconnectTimer) return;
+
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s (max)
+    var delay = Math.min(
+        baseReconnectDelay * Math.pow(2, reconnectAttempt),
+        maxReconnectDelay
+    );
+    // Add jitter (±20%)
+    delay = delay * (0.8 + Math.random() * 0.4);
+
+    reconnectAttempt++;
+    console.log('Reconnecting WebSocket in ' + Math.round(delay) + 'ms (attempt ' + reconnectAttempt + ')');
+
     reconnectTimer = setTimeout(function() {
         reconnectTimer = null;
-        console.log('Reconnecting WebSocket...');
         connectWebSocket();
-    }, 3000);
+    }, delay);
+}
+
+function startHeartbeat() {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(function() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+            } catch(e) {
+                console.error('Heartbeat send failed:', e);
+            }
+        }
+    }, heartbeatInterval);
+}
+
+function stopHeartbeat() {
+    if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+    }
 }
 
 function setConnectionStatus(connected) {
@@ -855,7 +922,7 @@ function setConnectionStatus(connected) {
     var text = $('status-text');
     if (connected) {
         dot.className = 'status-dot connected';
-        text.textContent = '已连接';
+        text.textContent = '已连接 (WS)';
     } else {
         dot.className = 'status-dot disconnected';
         text.textContent = '未连接';
@@ -1409,12 +1476,13 @@ function stopPolling() {
 }
 
 (function init() {
+    // Connect WebSocket first (primary transport)
     connectWebSocket();
 
     // HTTP polling fallback (starts immediately, pauses when WS connected)
     startPolling();
 
-    // Log polling (separate, runs always for incremental tail)
+    // Log polling via HTTP (runs always as incremental fallback)
     setInterval(fetchLogsIncremental, 2000);
 
     // Fetch system info via HTTP on load (one-time)
@@ -1426,6 +1494,21 @@ function stopPolling() {
             }
         })
         .catch(function() {});
+
+    // Handle page unload: clean disconnect
+    window.addEventListener('beforeunload', function() {
+        disconnectWebSocket();
+    });
+
+    // Handle visibility change: reconnect when tab becomes visible
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                reconnectAttempt = 0;
+                connectWebSocket();
+            }
+        }
+    });
 
     // Handle window resize for canvas redraws
     var resizeTimeout;

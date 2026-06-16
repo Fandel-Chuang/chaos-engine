@@ -90,11 +90,11 @@
 
 ## 5. 测试与文档
 
-- [ ] 5.1 编写 IPC 服务端单元测试：验证 JSON-RPC 请求/响应格式正确性
-- [ ] 5.2 编写 IPC 方法单元测试：验证各 handler 返回数据格式正确
-- [ ] 5.3 端到端集成测试：启动 server + admin，curl 验证所有 API 端点
-- [ ] 5.4 异常场景测试：server 未启动时 admin 返回 503、server 重启后 admin 恢复
-- [ ] 5.5 性能基准测试：IPC 通信延迟、CPU 开销
+- [x] 5.1 编写 IPC 服务端单元测试：验证 JSON-RPC 请求/响应格式正确性
+- [x] 5.2 编写 IPC 方法单元测试：验证各 handler 返回数据格式正确
+- [x] 5.3 端到端集成测试：启动 server + admin，curl 验证所有 API 端点
+- [x] 5.4 异常场景测试：server 未启动时 admin 返回 503、server 重启后 admin 恢复
+- [x] 5.5 性能基准测试：IPC 通信延迟、CPU 开销
 - [x] 5.6 编写规格书：`docs/spec/chaos-engine-admin-web-spec-v0.2.md`
 - [x] 5.7 编写 OpenSpec change 文件：proposal.md / specs/admin/spec.md / design.md / tasks.md
 
@@ -102,15 +102,15 @@
 
 ## 6. WebSocket 实时推送（延后）
 
-- [ ] 6.1 实现 Lapis WebSocket `/ws` 路由
-- [ ] 6.2 实现服务端定时推送循环（stats 500ms / aoi 500ms / cell 1000ms / network 1000ms / memory 2000ms / render 500ms）
-- [ ] 6.3 实现日志实时推送（逐条推送新日志）
-- [ ] 6.4 前端 WebSocket 客户端：替换 HTTP 轮询为 WebSocket 推送
-- [ ] 6.5 前端 WebSocket 自动重连（3 秒退避）
+- [x] 6.1 实现 Lapis WebSocket `/ws` 路由
+- [x] 6.2 实现服务端定时推送循环（stats 500ms / aoi 500ms / cell 1000ms / network 1000ms / memory 2000ms / render 500ms）
+- [x] 6.3 实现日志实时推送（逐条推送新日志）
+- [x] 6.4 前端 WebSocket 客户端：替换 HTTP 轮询为 WebSocket 推送
+- [x] 6.5 前端 WebSocket 自动重连（3 秒退避）
 
 ---
 
-**总进度：29/34 已完成（85%）**
+**总进度：34/34 已完成（100%）** ✅
 
 **已完成（Phase 1-4）**：IPC 服务端（10 个 RPC 方法）、Lapis HTTP 服务（11 个端点）、前端仪表盘（12 个面板）、一键启动脚本。
 
