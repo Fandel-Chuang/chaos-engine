@@ -18,18 +18,29 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
+#include <net/if.h>       /* IF_NAMESIZE, if_nametoindex */
 
 /* ---- 内部结构 ---- */
 
 #define CE_EBPF_MAX_PROGS 16
 
 struct CeEbpfContext {
-    struct bpf_object*  obj;
+    struct bpf_object*  obj;          /* 可观测性 BPF 对象 */
     struct bpf_program* progs[CE_EBPF_MAX_PROGS];
     int                 prog_count;
     struct bpf_link*    links[CE_EBPF_MAX_PROGS];
     int                 link_count;
     CeBool              loaded;
+
+    /* XDP 包过滤 (Phase 4.1) */
+    struct bpf_object*  xdp_filter_obj;
+    struct bpf_link*    xdp_filter_link;
+    CeBool              xdp_filter_attached;
+
+    /* XDP 连接分发 (Phase 4.2) */
+    struct bpf_object*  xdp_dispatch_obj;
+    struct bpf_link*    xdp_dispatch_link;
+    CeBool              xdp_dispatch_attached;
 };
 
 /* ---- 生命周期 ---- */
@@ -66,6 +77,15 @@ void ce_ebpf_shutdown(CeEbpfContext* ctx) {
 
     /* 释放 BPF 对象 */
     if (ctx->obj) bpf_object__close(ctx->obj);
+
+    /* 清理 XDP filter */
+    if (ctx->xdp_filter_link) bpf_link__destroy(ctx->xdp_filter_link);
+    if (ctx->xdp_filter_obj)  bpf_object__close(ctx->xdp_filter_obj);
+
+    /* 清理 XDP dispatch */
+    if (ctx->xdp_dispatch_link) bpf_link__destroy(ctx->xdp_dispatch_link);
+    if (ctx->xdp_dispatch_obj)  bpf_object__close(ctx->xdp_dispatch_obj);
+
     free(ctx);
     CE_LOG_INFO("EBPF", "Shut down");
 }
@@ -251,6 +271,361 @@ void ce_ebpf_get_io_latency_stats(CeEbpfContext* ctx, int* p50, int* p90, int* p
     }
 }
 
+/* ---- XDP 包过滤 (Phase 4.1) ---- */
+
+CeResult ce_ebpf_xdp_filter_attach(CeEbpfContext* ctx, const char* ifname) {
+    if (!ctx || !ifname) return CE_ERR;
+
+    /* 打开 XDP filter BPF 对象 */
+    const char* obj_path = "src_c/ebpf/ce_xdp_filter.bpf.o";
+    ctx->xdp_filter_obj = bpf_object__open(obj_path);
+    if (!ctx->xdp_filter_obj) {
+        obj_path = "ce_xdp_filter.bpf.o";
+        ctx->xdp_filter_obj = bpf_object__open(obj_path);
+    }
+    if (!ctx->xdp_filter_obj) {
+        CE_LOG_WARN("EBPF", "Failed to open XDP filter BPF object: %s", strerror(errno));
+        return CE_ERR;
+    }
+
+    /* 加载到内核 */
+    int ret = bpf_object__load(ctx->xdp_filter_obj);
+    if (ret < 0) {
+        CE_LOG_ERROR("EBPF", "Failed to load XDP filter: %d", ret);
+        bpf_object__close(ctx->xdp_filter_obj);
+        ctx->xdp_filter_obj = NULL;
+        return CE_ERR;
+    }
+
+    /* 查找 xdp_filter 程序 */
+    struct bpf_program* prog = bpf_object__find_program_by_name(ctx->xdp_filter_obj, "xdp_filter");
+    if (!prog) {
+        CE_LOG_ERROR("EBPF", "XDP filter program not found in object");
+        bpf_object__close(ctx->xdp_filter_obj);
+        ctx->xdp_filter_obj = NULL;
+        return CE_ERR;
+    }
+
+    /* 获取接口索引 */
+    unsigned int ifindex = if_nametoindex(ifname);
+    if (ifindex == 0) {
+        CE_LOG_ERROR("EBPF", "Invalid interface: %s", ifname);
+        bpf_object__close(ctx->xdp_filter_obj);
+        ctx->xdp_filter_obj = NULL;
+        return CE_ERR;
+    }
+
+    /* Attach XDP 程序 */
+    ctx->xdp_filter_link = bpf_program__attach_xdp(prog, ifindex);
+    if (!ctx->xdp_filter_link) {
+        CE_LOG_ERROR("EBPF", "Failed to attach XDP filter to %s: %s", ifname, strerror(errno));
+        bpf_object__close(ctx->xdp_filter_obj);
+        ctx->xdp_filter_obj = NULL;
+        return CE_ERR;
+    }
+
+    ctx->xdp_filter_attached = CE_TRUE;
+    CE_LOG_INFO("EBPF", "XDP filter attached to %s (ifindex=%u)", ifname, ifindex);
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_filter_blacklist_add(CeEbpfContext* ctx, uint32_t ip_addr) {
+    if (!ctx || !ctx->xdp_filter_obj) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_filter_obj, "ip_blacklist");
+    if (!map) return CE_ERR;
+
+    __u8 val = 1;
+    int ret = bpf_map_update_elem(bpf_map__fd(map), &ip_addr, &val, BPF_ANY);
+    if (ret < 0) {
+        CE_LOG_WARN("EBPF", "Failed to add IP to blacklist: %d", ret);
+        return CE_ERR;
+    }
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_filter_blacklist_del(CeEbpfContext* ctx, uint32_t ip_addr) {
+    if (!ctx || !ctx->xdp_filter_obj) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_filter_obj, "ip_blacklist");
+    if (!map) return CE_ERR;
+
+    int ret = bpf_map_delete_elem(bpf_map__fd(map), &ip_addr);
+    if (ret < 0) return CE_ERR;
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_filter_set_syn_threshold(CeEbpfContext* ctx, uint32_t threshold) {
+    if (!ctx || !ctx->xdp_filter_obj) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_filter_obj, "xdp_filter_config");
+    if (!map) return CE_ERR;
+
+    __u32 key = 0;
+    __u64 val = threshold;
+    int ret = bpf_map_update_elem(bpf_map__fd(map), &key, &val, BPF_ANY);
+    if (ret < 0) return CE_ERR;
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_filter_set_rate_limit(CeEbpfContext* ctx, uint32_t tokens_per_sec) {
+    if (!ctx || !ctx->xdp_filter_obj) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_filter_obj, "xdp_filter_config");
+    if (!map) return CE_ERR;
+
+    /* 设置速率和桶大小 */
+    __u32 key_rate = 2;
+    __u32 key_burst = 3;
+    __u64 val = tokens_per_sec;
+    int ret = bpf_map_update_elem(bpf_map__fd(map), &key_rate, &val, BPF_ANY);
+    if (ret < 0) return CE_ERR;
+    ret = bpf_map_update_elem(bpf_map__fd(map), &key_burst, &val, BPF_ANY);
+    if (ret < 0) return CE_ERR;
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_filter_set_enabled(CeEbpfContext* ctx, CeBool enabled) {
+    if (!ctx || !ctx->xdp_filter_obj) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_filter_obj, "xdp_filter_config");
+    if (!map) return CE_ERR;
+
+    __u32 key = 4;
+    __u64 val = enabled ? 1 : 0;
+    int ret = bpf_map_update_elem(bpf_map__fd(map), &key, &val, BPF_ANY);
+    if (ret < 0) return CE_ERR;
+    return CE_OK;
+}
+
+void ce_ebpf_xdp_filter_get_stats(CeEbpfContext* ctx,
+                                   uint64_t* total, uint64_t* passed,
+                                   uint64_t* dropped_blacklist,
+                                   uint64_t* dropped_syn_flood,
+                                   uint64_t* dropped_rate_limit) {
+    if (total) *total = 0;
+    if (passed) *passed = 0;
+    if (dropped_blacklist) *dropped_blacklist = 0;
+    if (dropped_syn_flood) *dropped_syn_flood = 0;
+    if (dropped_rate_limit) *dropped_rate_limit = 0;
+
+    if (!ctx || !ctx->xdp_filter_obj) return;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_filter_obj, "xdp_filter_stats");
+    if (!map) return;
+
+    int fd = bpf_map__fd(map);
+    if (fd < 0) return;
+
+    /* PERCPU_ARRAY: lookup returns nr_cpus * sizeof(value) bytes.
+     * We allocate a buffer for up to 256 CPUs and sum across them. */
+    int ncpus = libbpf_num_possible_cpus();
+    if (ncpus <= 0) ncpus = 1;
+    if (ncpus > 256) ncpus = 256;
+
+    size_t buf_size = (size_t)ncpus * sizeof(__u64);
+    __u64* buf = (__u64*)malloc(buf_size);
+    if (!buf) return;
+
+    __u32 key;
+    __u64 agg_total = 0, agg_passed = 0, agg_bl = 0, agg_syn = 0, agg_rl = 0;
+
+    key = 0;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_total += buf[i];
+    key = 1;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_passed += buf[i];
+    key = 2;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_bl += buf[i];
+    key = 3;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_syn += buf[i];
+    key = 4;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_rl += buf[i];
+
+    free(buf);
+
+    if (total) *total = agg_total;
+    if (passed) *passed = agg_passed;
+    if (dropped_blacklist) *dropped_blacklist = agg_bl;
+    if (dropped_syn_flood) *dropped_syn_flood = agg_syn;
+    if (dropped_rate_limit) *dropped_rate_limit = agg_rl;
+}
+
+/* ---- XDP 连接分发 (Phase 4.2) ---- */
+
+CeResult ce_ebpf_xdp_dispatch_attach(CeEbpfContext* ctx, const char* ifname) {
+    if (!ctx || !ifname) return CE_ERR;
+
+    /* 打开 XDP dispatch BPF 对象 */
+    const char* obj_path = "src_c/ebpf/ce_xdp_dispatch.bpf.o";
+    ctx->xdp_dispatch_obj = bpf_object__open(obj_path);
+    if (!ctx->xdp_dispatch_obj) {
+        obj_path = "ce_xdp_dispatch.bpf.o";
+        ctx->xdp_dispatch_obj = bpf_object__open(obj_path);
+    }
+    if (!ctx->xdp_dispatch_obj) {
+        CE_LOG_WARN("EBPF", "Failed to open XDP dispatch BPF object: %s", strerror(errno));
+        return CE_ERR;
+    }
+
+    /* 加载到内核 */
+    int ret = bpf_object__load(ctx->xdp_dispatch_obj);
+    if (ret < 0) {
+        CE_LOG_ERROR("EBPF", "Failed to load XDP dispatch: %d", ret);
+        bpf_object__close(ctx->xdp_dispatch_obj);
+        ctx->xdp_dispatch_obj = NULL;
+        return CE_ERR;
+    }
+
+    /* 查找 xdp_dispatch 程序 */
+    struct bpf_program* prog = bpf_object__find_program_by_name(ctx->xdp_dispatch_obj, "xdp_dispatch");
+    if (!prog) {
+        CE_LOG_ERROR("EBPF", "XDP dispatch program not found in object");
+        bpf_object__close(ctx->xdp_dispatch_obj);
+        ctx->xdp_dispatch_obj = NULL;
+        return CE_ERR;
+    }
+
+    /* 获取接口索引 */
+    unsigned int ifindex = if_nametoindex(ifname);
+    if (ifindex == 0) {
+        CE_LOG_ERROR("EBPF", "Invalid interface: %s", ifname);
+        bpf_object__close(ctx->xdp_dispatch_obj);
+        ctx->xdp_dispatch_obj = NULL;
+        return CE_ERR;
+    }
+
+    /* Attach XDP 程序 */
+    ctx->xdp_dispatch_link = bpf_program__attach_xdp(prog, ifindex);
+    if (!ctx->xdp_dispatch_link) {
+        CE_LOG_ERROR("EBPF", "Failed to attach XDP dispatch to %s: %s", ifname, strerror(errno));
+        bpf_object__close(ctx->xdp_dispatch_obj);
+        ctx->xdp_dispatch_obj = NULL;
+        return CE_ERR;
+    }
+
+    ctx->xdp_dispatch_attached = CE_TRUE;
+    CE_LOG_INFO("EBPF", "XDP dispatch attached to %s (ifindex=%u)", ifname, ifindex);
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_dispatch_set_num_cpus(CeEbpfContext* ctx, uint32_t num_cpus) {
+    if (!ctx || !ctx->xdp_dispatch_obj) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_dispatch_obj, "xdp_dispatch_config");
+    if (!map) return CE_ERR;
+
+    __u32 key = 0;
+    __u64 val = num_cpus;
+    int ret = bpf_map_update_elem(bpf_map__fd(map), &key, &val, BPF_ANY);
+    if (ret < 0) return CE_ERR;
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_dispatch_set_mode(CeEbpfContext* ctx, uint32_t mode) {
+    if (!ctx || !ctx->xdp_dispatch_obj) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_dispatch_obj, "xdp_dispatch_config");
+    if (!map) return CE_ERR;
+
+    __u32 key = 1;
+    __u64 val = mode;
+    int ret = bpf_map_update_elem(bpf_map__fd(map), &key, &val, BPF_ANY);
+    if (ret < 0) return CE_ERR;
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_dispatch_set_player_id_offset(CeEbpfContext* ctx, uint32_t offset) {
+    if (!ctx || !ctx->xdp_dispatch_obj) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_dispatch_obj, "xdp_dispatch_config");
+    if (!map) return CE_ERR;
+
+    __u32 key = 2;
+    __u64 val = offset;
+    int ret = bpf_map_update_elem(bpf_map__fd(map), &key, &val, BPF_ANY);
+    if (ret < 0) return CE_ERR;
+    return CE_OK;
+}
+
+CeResult ce_ebpf_xdp_dispatch_add_xsk(CeEbpfContext* ctx, uint32_t queue_id, int xsk_fd) {
+    if (!ctx || !ctx->xdp_dispatch_obj || xsk_fd < 0) return CE_ERR;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_dispatch_obj, "xsks_map");
+    if (!map) return CE_ERR;
+
+    int ret = bpf_map_update_elem(bpf_map__fd(map), &queue_id, &xsk_fd, BPF_ANY);
+    if (ret < 0) {
+        CE_LOG_WARN("EBPF", "Failed to add XSK fd %d to queue %u: %d", xsk_fd, queue_id, ret);
+        return CE_ERR;
+    }
+    CE_LOG_INFO("EBPF", "Added XSK fd %d to queue %u", xsk_fd, queue_id);
+    return CE_OK;
+}
+
+void ce_ebpf_xdp_dispatch_get_stats(CeEbpfContext* ctx,
+                                     uint64_t* total, uint64_t* tcp,
+                                     uint64_t* udp, uint64_t* redirected,
+                                     uint64_t* passed, uint64_t* dropped) {
+    if (total) *total = 0;
+    if (tcp) *tcp = 0;
+    if (udp) *udp = 0;
+    if (redirected) *redirected = 0;
+    if (passed) *passed = 0;
+    if (dropped) *dropped = 0;
+
+    if (!ctx || !ctx->xdp_dispatch_obj) return;
+
+    struct bpf_map* map = bpf_object__find_map_by_name(ctx->xdp_dispatch_obj, "xdp_dispatch_stats");
+    if (!map) return;
+
+    int fd = bpf_map__fd(map);
+    if (fd < 0) return;
+
+    int ncpus = libbpf_num_possible_cpus();
+    if (ncpus <= 0) ncpus = 1;
+    if (ncpus > 256) ncpus = 256;
+
+    size_t buf_size = (size_t)ncpus * sizeof(__u64);
+    __u64* buf = (__u64*)malloc(buf_size);
+    if (!buf) return;
+
+    __u32 key;
+    __u64 agg_total = 0, agg_tcp = 0, agg_udp = 0, agg_redir = 0, agg_pass = 0, agg_drop = 0;
+
+    key = 0;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_total += buf[i];
+    key = 1;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_tcp += buf[i];
+    key = 2;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_udp += buf[i];
+    key = 3;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_redir += buf[i];
+    key = 4;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_pass += buf[i];
+    key = 5;
+    if (bpf_map_lookup_elem(fd, &key, buf) == 0)
+        for (int i = 0; i < ncpus; i++) agg_drop += buf[i];
+
+    free(buf);
+
+    if (total) *total = agg_total;
+    if (tcp) *tcp = agg_tcp;
+    if (udp) *udp = agg_udp;
+    if (redirected) *redirected = agg_redir;
+    if (passed) *passed = agg_pass;
+    if (dropped) *dropped = agg_drop;
+}
+
 /* ---- 查询 ---- */
 
 CeBool ce_ebpf_available(void) {
@@ -270,6 +645,22 @@ CeResult ce_ebpf_trace_tcp_retransmit(CeEbpfContext* ctx) { (void)ctx; return CE
 int ce_ebpf_get_retransmit_count(CeEbpfContext* ctx) { (void)ctx; return 0; }
 CeResult ce_ebpf_trace_io_latency(CeEbpfContext* ctx) { (void)ctx; return CE_ERR; }
 void ce_ebpf_get_io_latency_stats(CeEbpfContext* ctx, int* p50, int* p90, int* p99) { (void)ctx; *p50 = *p90 = *p99 = 0; }
+
+/* XDP stubs */
+CeResult ce_ebpf_xdp_filter_attach(CeEbpfContext* ctx, const char* ifname) { (void)ctx; (void)ifname; return CE_ERR; }
+CeResult ce_ebpf_xdp_filter_blacklist_add(CeEbpfContext* ctx, uint32_t ip_addr) { (void)ctx; (void)ip_addr; return CE_ERR; }
+CeResult ce_ebpf_xdp_filter_blacklist_del(CeEbpfContext* ctx, uint32_t ip_addr) { (void)ctx; (void)ip_addr; return CE_ERR; }
+CeResult ce_ebpf_xdp_filter_set_syn_threshold(CeEbpfContext* ctx, uint32_t threshold) { (void)ctx; (void)threshold; return CE_ERR; }
+CeResult ce_ebpf_xdp_filter_set_rate_limit(CeEbpfContext* ctx, uint32_t tokens_per_sec) { (void)ctx; (void)tokens_per_sec; return CE_ERR; }
+CeResult ce_ebpf_xdp_filter_set_enabled(CeEbpfContext* ctx, CeBool enabled) { (void)ctx; (void)enabled; return CE_ERR; }
+void ce_ebpf_xdp_filter_get_stats(CeEbpfContext* ctx, uint64_t* total, uint64_t* passed, uint64_t* dropped_blacklist, uint64_t* dropped_syn_flood, uint64_t* dropped_rate_limit) { (void)ctx; if(total)*total=0; if(passed)*passed=0; if(dropped_blacklist)*dropped_blacklist=0; if(dropped_syn_flood)*dropped_syn_flood=0; if(dropped_rate_limit)*dropped_rate_limit=0; }
+CeResult ce_ebpf_xdp_dispatch_attach(CeEbpfContext* ctx, const char* ifname) { (void)ctx; (void)ifname; return CE_ERR; }
+CeResult ce_ebpf_xdp_dispatch_set_num_cpus(CeEbpfContext* ctx, uint32_t num_cpus) { (void)ctx; (void)num_cpus; return CE_ERR; }
+CeResult ce_ebpf_xdp_dispatch_set_mode(CeEbpfContext* ctx, uint32_t mode) { (void)ctx; (void)mode; return CE_ERR; }
+CeResult ce_ebpf_xdp_dispatch_set_player_id_offset(CeEbpfContext* ctx, uint32_t offset) { (void)ctx; (void)offset; return CE_ERR; }
+CeResult ce_ebpf_xdp_dispatch_add_xsk(CeEbpfContext* ctx, uint32_t queue_id, int xsk_fd) { (void)ctx; (void)queue_id; (void)xsk_fd; return CE_ERR; }
+void ce_ebpf_xdp_dispatch_get_stats(CeEbpfContext* ctx, uint64_t* total, uint64_t* tcp, uint64_t* udp, uint64_t* redirected, uint64_t* passed, uint64_t* dropped) { (void)ctx; if(total)*total=0; if(tcp)*tcp=0; if(udp)*udp=0; if(redirected)*redirected=0; if(passed)*passed=0; if(dropped)*dropped=0; }
+
 CeBool ce_ebpf_available(void) { return CE_FALSE; }
 
 #endif /* CHAOS_HAS_EBPF */

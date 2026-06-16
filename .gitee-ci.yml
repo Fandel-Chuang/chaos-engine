@@ -1,0 +1,159 @@
+# ChaosEngine CI — Gitee Go 流水线
+# 每次 PR 自动运行：编译 + 全量测试 + 冒烟测试
+# 全部通过后才允许合入
+
+name: ChaosEngine CI
+
+on:
+  pull_request:
+    branches: [master, develop]
+  push:
+    branches: [master, develop]
+
+jobs:
+  # ── Job 1: 编译 + 全量测试 ──
+  build-and-test:
+    name: 编译 & 测试 (Debug)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            cmake build-essential \
+            liblua5.4-dev liburing-dev libbpf-dev \
+            clang llvm
+
+      - name: CMake 配置
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Debug
+
+      - name: 编译
+        run: cd build && make -j$(nproc)
+
+      - name: 全量测试
+        run: cd build && ctest --output-on-failure -j$(nproc)
+
+  # ── Job 2: 冒烟测试 (快速验证关键路径) ──
+  smoke-test:
+    name: 冒烟测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: build-and-test
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            cmake build-essential \
+            liblua5.4-dev liburing-dev libbpf-dev \
+            clang llvm
+
+      - name: 冒烟测试
+        run: |
+          chmod +x scripts/build_and_test.sh
+          ./scripts/build_and_test.sh --no-test
+
+  # ── Job 3: Release 编译验证 ──
+  release-build:
+    name: Release 编译
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            cmake build-essential \
+            liblua5.4-dev liburing-dev libbpf-dev \
+            clang llvm
+
+      - name: Release 编译
+        run: |
+          mkdir -p build_rel && cd build_rel
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+
+  # ── Job 4: Lua 语法检查 ──
+  lua-lint:
+    name: Lua 语法检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Lua
+        run: sudo apt-get install -y -qq lua5.4
+
+      - name: 语法检查
+        run: |
+          echo "检查所有 Lua 文件语法..."
+          FAIL=0
+          for f in $(find src_lua/ -name '*.lua'); do
+            if ! lua5.4 -e "loadfile('$f')" 2>/dev/null; then
+              echo "❌ 语法错误: $f"
+              lua5.4 -e "loadfile('$f')"
+              FAIL=1
+            fi
+          done
+          if [ $FAIL -eq 0 ]; then
+            echo "✅ 所有 Lua 文件语法正确 ($(find src_lua/ -name '*.lua' | wc -l) 个文件)"
+          else
+            exit 1
+          fi
+
+  # ── Job 5: 内存检查 (Valgrind) ──
+  memcheck:
+    name: 内存检查 (Valgrind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build-and-test
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            cmake build-essential valgrind \
+            liblua5.4-dev liburing-dev libbpf-dev \
+            clang llvm
+
+      - name: 编译 (Debug)
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Debug
+          make -j$(nproc)
+
+      - name: Valgrind 内存检查
+        run: |
+          cd build
+          # 对核心测试运行 Valgrind
+          for test in test_math test_memory test_ecs test_aoi test_cell test_network test_net_base; do
+            echo "--- Valgrind: $test ---"
+            valgrind --leak-check=full --error-exitcode=1 \
+              --suppressions=../scripts/valgrind.supp \
+              ./bin/$test 2>&1 | tail -5 || {
+              echo "❌ $test 内存泄漏"
+              exit 1
+            }
+          done
+          echo "✅ Valgrind 检查通过"

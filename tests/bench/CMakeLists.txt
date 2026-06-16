@@ -21,3 +21,13 @@ target_include_directories(bench_runner PRIVATE
 )
 target_link_libraries(bench_runner PRIVATE m pthread)
 set_target_properties(bench_runner PROPERTIES LINKER_LANGUAGE C)
+
+# ---- bench_xdp: XDP 性能基准测试 (Phase 4.6) ----
+# 对比 XDP 路径 vs 传统内核网络栈的吞吐量和延迟
+add_executable(bench_xdp bench_xdp.c)
+target_include_directories(bench_xdp PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(bench_xdp PRIVATE m pthread)
+set_target_properties(bench_xdp PROPERTIES LINKER_LANGUAGE C)

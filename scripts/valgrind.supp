@@ -1,0 +1,34 @@
+# Valgrind suppression file for ChaosEngine
+# 忽略已知的第三方库/系统库误报
+
+{
+   <lua_alloc_suppress>
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:luaM_realloc_
+}
+
+{
+   <vulkan_loader_suppress>
+   Memcheck:Leak
+   match-leak-kinds: possible
+   ...
+   obj:/usr/lib/x86_64-linux-gnu/libvulkan.so*
+}
+
+{
+   <libbpf_suppress>
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   obj:/usr/lib/x86_64-linux-gnu/libbpf.so*
+}
+
+{
+   <liburing_suppress>
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   obj:/usr/lib/x86_64-linux-gnu/liburing.so*
+}

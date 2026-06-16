@@ -3,7 +3,7 @@
 # 规则：禁止 C++ 语法、禁止 .cpp/.hpp 文件
 # ============================================================
 
-# 收集 src_c 下所有 .c 源文件
+# 收集 src_c 下所有 .c 源文件 (排除 BPF 内核程序 *_kern.c 和 *.bpf.c)
 file(GLOB_RECURSE ENGINE_CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/core/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/ecs/*.c"
@@ -11,9 +11,14 @@ file(GLOB_RECURSE ENGINE_CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/render/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/network/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ebpf/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/script/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/ce_engine.c"
 )
+
+# 排除 BPF 内核程序 (这些需要 clang -target bpf 编译，不能通过标准 C 编译器)
+list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*_kern\\.c$")
+list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*\\.bpf\\.c$")
 
 # 收集 public_api 头文件（仅用于 IDE 索引，不参与编译）
 file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS
@@ -46,6 +51,7 @@ target_include_directories(engine_core
         ${CMAKE_CURRENT_SOURCE_DIR}/render
         ${CMAKE_CURRENT_SOURCE_DIR}/network
         ${CMAKE_CURRENT_SOURCE_DIR}/script
+        ${CMAKE_CURRENT_SOURCE_DIR}/ebpf
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime
         ${VULKAN_HEADERS_DIR}
         ${X11_HEADERS_DIR}
@@ -74,6 +80,51 @@ elseif(UNIX AND NOT APPLE)
                 target_include_directories(engine_core PRIVATE ${LIBBPF_INCLUDE_DIRS})
                 target_link_libraries(engine_core PRIVATE ${LIBBPF_LIBRARIES})
                 message(STATUS "eBPF: enabled (libbpf ${LIBBPF_VERSION})")
+
+                # ---- BPF 程序编译 (clang -target bpf) ----
+                # 共享的 BPF 编译选项
+                set(BPF_C_FLAGS -O2 -target bpf -I${CMAKE_CURRENT_SOURCE_DIR}/ebpf
+                    -I/usr/include/x86_64-linux-gnu)
+
+                # XDP 包过滤 (Phase 4.1)
+                add_custom_command(
+                    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_filter.bpf.o
+                    COMMAND clang ${BPF_C_FLAGS}
+                        -c ${CMAKE_CURRENT_SOURCE_DIR}/ebpf/ce_xdp_filter.bpf.c
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_filter.bpf.o
+                    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/ebpf/ce_xdp_filter.bpf.c
+                            ${CMAKE_CURRENT_SOURCE_DIR}/ebpf/ce_xdp_common.h
+                    COMMENT "Compiling XDP filter BPF program"
+                )
+
+                # XDP 连接分发 (Phase 4.2)
+                add_custom_command(
+                    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_dispatch.bpf.o
+                    COMMAND clang ${BPF_C_FLAGS}
+                        -c ${CMAKE_CURRENT_SOURCE_DIR}/ebpf/ce_xdp_dispatch.bpf.c
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_dispatch.bpf.o
+                    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/ebpf/ce_xdp_dispatch.bpf.c
+                            ${CMAKE_CURRENT_SOURCE_DIR}/ebpf/ce_xdp_common.h
+                    COMMENT "Compiling XDP dispatch BPF program"
+                )
+
+                # 可观测性 BPF 程序 (已有)
+                add_custom_command(
+                    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ce_ebpf_kern.bpf.o
+                    COMMAND clang ${BPF_C_FLAGS}
+                        -c ${CMAKE_CURRENT_SOURCE_DIR}/network/ce_ebpf_kern.c
+                        -o ${CMAKE_CURRENT_BINARY_DIR}/ce_ebpf_kern.bpf.o
+                    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/network/ce_ebpf_kern.c
+                    COMMENT "Compiling eBPF observability program"
+                )
+
+                # 聚合目标: 编译所有 BPF 程序
+                add_custom_target(bpf_programs ALL
+                    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_filter.bpf.o
+                            ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_dispatch.bpf.o
+                            ${CMAKE_CURRENT_BINARY_DIR}/ce_ebpf_kern.bpf.o
+                )
+                add_dependencies(engine_core bpf_programs)
             else()
                 message(STATUS "eBPF: disabled (libbpf not found)")
             endif()
