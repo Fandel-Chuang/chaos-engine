@@ -35,11 +35,23 @@ done
 # 清理残留的 chaos 进程
 ORPHANS=$(pgrep -f "chaos_" 2>/dev/null || true)
 if [ -n "$ORPHANS" ]; then
-    echo -e "${YELLOW}清理残留进程...${NC}"
+    echo -e "${YELLOW}清理残留 chaos 进程...${NC}"
     for p in $ORPHANS; do
         kill -9 "$p" 2>/dev/null || true
     done
 fi
+
+# 清理 lapis/nginx admin 进程
+NGINX_PIDS=$(pgrep -f "nginx.*admin" 2>/dev/null || true)
+if [ -n "$NGINX_PIDS" ]; then
+    echo -e "${YELLOW}清理 nginx admin 进程...${NC}"
+    for p in $NGINX_PIDS; do
+        kill "$p" 2>/dev/null || true
+    done
+fi
+
+# 清理 admin socket
+rm -f /tmp/chaos_admin.sock
 
 echo ""
 echo -e "${GREEN}✅ 已停止 ${STOPPED} 个服务${NC}"

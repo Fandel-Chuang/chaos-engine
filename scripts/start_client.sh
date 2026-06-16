@@ -20,13 +20,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-MODE="vulkan"
+MODE="tcp"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --tcp)      MODE="tcp"; shift ;;
         --ws)       MODE="ws"; shift ;;
         --headless) MODE="headless"; shift ;;
+        --vulkan)   MODE="vulkan"; shift ;;
         --stress)   MODE="stress"; CONNS="${2:-100}"; shift 2 ;;
         --host)     GATEWAY_HOST="$2"; shift 2 ;;
         --port)     GAME_PORT="$2"; shift 2 ;;

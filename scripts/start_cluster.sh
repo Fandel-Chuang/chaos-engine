@@ -129,10 +129,10 @@ if [ $START_ROUTER -eq 1 ]; then
         "--port ${ROUTER_GAME_PORT} --cluster-port ${ROUTER_CLUSTER_PORT}"
 fi
 
-# ── 启动 Game Server ──
+# ── 启动 Game Server（带 admin IPC socket） ──
 if [ $START_GAME -eq 1 ]; then
     start_service "game" "${BIN_DIR}/chaos_server" \
-        "--port ${GAME_PORT} --router 127.0.0.1:${ROUTER_GAME_PORT} --dbproxy 127.0.0.1:${DBPROXY_PORT}"
+        "--admin --port ${GAME_PORT} --router 127.0.0.1:${ROUTER_GAME_PORT} --dbproxy 127.0.0.1:${DBPROXY_PORT}"
 fi
 
 # ── 启动 Gateway（最后，客户端入口） ──
@@ -141,10 +141,30 @@ if [ $START_GATEWAY -eq 1 ]; then
         "--gateway --tcp-port ${GATEWAY_TCP_PORT} --kcp-port ${GATEWAY_KCP_PORT} --ws-port ${GATEWAY_WS_PORT} --backend 127.0.0.1:${GAME_PORT}"
 fi
 
-# ── 启动 Admin Web ──
+# ── 启动 Admin Web（Lapis HTTP 后台） ──
 if [ $START_ADMIN -eq 1 ]; then
-    start_service "admin" "${BIN_DIR}/chaos_server" \
-        "--admin --port ${ADMIN_PORT}"
+    # 等待 admin socket 就绪
+    echo -e "${BLUE}🚀 启动 Admin Web (Lapis)...${NC}"
+    for i in $(seq 1 30); do
+        if [ -S /tmp/chaos_admin.sock ]; then break; fi
+        sleep 0.2
+    done
+
+    if [ ! -S /tmp/chaos_admin.sock ]; then
+        echo -e "${RED}❌ Admin socket 未就绪，game server 是否带 --admin 启动？${NC}"
+    else
+        cd "${PROJECT_DIR}/src_lua/admin"
+        nohup lapis server > "${LOG_DIR}/admin.log" 2>&1 &
+        apid=$!
+        echo "$apid" > "${PID_DIR}/admin.pid"
+        cd "${PROJECT_DIR}"
+        sleep 1
+        if kill -0 "$apid" 2>/dev/null; then
+            echo -e "${GREEN}✅ admin: 启动成功 (PID $apid, port ${ADMIN_PORT})${NC}"
+        else
+            echo -e "${RED}❌ admin: 启动失败，查看日志: ${LOG_DIR}/admin.log${NC}"
+        fi
+    fi
 fi
 
 # ── 状态汇总 ──
