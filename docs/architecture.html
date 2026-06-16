@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChaosEngine — 总体架构图</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --bg-card: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-dim: #8b949e;
+            --accent: #58a6ff;
+            --green: #3fb950;
+            --orange: #d2991d;
+            --red: #f85149;
+            --purple: #a371f7;
+            --pink: #db61a2;
+            --cyan: #39c5cf;
+            --yellow: #e3b341;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        /* ── Header ── */
+        .header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 20px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .header h1 {
+            font-size: 1.6em;
+            background: linear-gradient(135deg, var(--accent), var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .header .meta {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .badge {
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.78em;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .badge-c    { background: #555; color: #fff; }
+        .badge-cpp  { background: #00599C; color: #fff; }
+        .badge-lua  { background: #00007f; color: #fff; }
+        .badge-ver  { background: var(--purple); color: #fff; }
+
+        /* ── Main Container ── */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px 20px;
+        }
+
+        /* ── Section Titles ── */
+        .section-title {
+            font-size: 1.15em;
+            font-weight: 700;
+            color: var(--accent);
+            margin: 32px 0 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .section-title .icon { font-size: 1.2em; }
+
+        /* ── Architecture Layers ── */
+        .arch-layers {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .layer {
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .layer-header {
+            padding: 10px 16px;
+            font-weight: 700;
+            font-size: 0.9em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .layer-header .lang-tag {
+            font-size: 0.7em;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            opacity: 0.85;
+        }
+        .layer-editor      { background: rgba(0,89,156,0.15); }
+        .layer-editor .lang-tag { background: #00599C; color: #fff; }
+        .layer-public      { background: rgba(63,185,80,0.10); }
+        .layer-public .lang-tag { background: #1a7f37; color: #fff; }
+        .layer-core        { background: rgba(88,166,255,0.10); }
+        .layer-core .lang-tag { background: #1f6feb; color: #fff; }
+        .layer-lua         { background: rgba(0,0,127,0.12); }
+        .layer-lua .lang-tag { background: #00007f; color: #fff; }
+        .layer-platform    { background: rgba(210,153,29,0.10); }
+        .layer-platform .lang-tag { background: #9e6a03; color: #fff; }
+
+        .layer-body {
+            padding: 12px 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .module {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 14px;
+            font-size: 0.82em;
+            white-space: nowrap;
+            transition: border-color 0.2s;
+        }
+        .module:hover {
+            border-color: var(--accent);
+        }
+        .module .mod-name {
+            font-weight: 600;
+            color: var(--text);
+        }
+        .module .mod-detail {
+            font-size: 0.8em;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+        .module-core   { border-left: 3px solid var(--accent); }
+        .module-net    { border-left: 3px solid var(--cyan); }
+        .module-server { border-left: 3px solid var(--green); }
+        .module-sync   { border-left: 3px solid var(--orange); }
+        .module-lua    { border-left: 3px solid var(--purple); }
+        .module-editor { border-left: 3px solid #00599C; }
+
+        /* ── Arrow between layers ── */
+        .layer-arrow {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.85em;
+            padding: 2px 0;
+            user-select: none;
+        }
+
+        /* ── Two-column layout ── */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        @media (max-width: 900px) {
+            .two-col { grid-template-columns: 1fr; }
+        }
+
+        /* ── Process Topology ── */
+        .topo-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .topo-card h3 {
+            font-size: 0.95em;
+            color: var(--accent);
+            margin-bottom: 16px;
+        }
+        .machine {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            position: relative;
+        }
+        .machine-label {
+            font-size: 0.78em;
+            font-weight: 700;
+            color: var(--orange);
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .proc-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .proc {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 14px;
+            font-size: 0.82em;
+        }
+        .proc.primary {
+            border-color: var(--green);
+            box-shadow: 0 0 0 1px rgba(63,185,80,0.3);
+        }
+        .proc.backup {
+            border-color: var(--orange);
+            border-style: dashed;
+        }
+        .proc .proc-name {
+            font-weight: 700;
+        }
+        .proc .proc-role {
+            font-size: 0.78em;
+            color: var(--text-dim);
+        }
+        .proc .proc-port {
+            font-size: 0.75em;
+            color: var(--text-dim);
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        }
+
+        .flow-arrows {
+            margin: 12px 0;
+            padding: 8px 16px;
+            background: var(--bg);
+            border-radius: 6px;
+            border: 1px dashed var(--border);
+        }
+        .flow-item {
+            font-size: 0.8em;
+            padding: 4px 0;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .flow-item .arrow-icon {
+            color: var(--green);
+            font-weight: 700;
+        }
+        .flow-item .arrow-label {
+            color: var(--cyan);
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.85em;
+        }
+
+        /* ── OpenSpec Changes ── */
+        .changes-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 14px;
+        }
+        .change-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            transition: border-color 0.2s;
+        }
+        .change-card:hover {
+            border-color: var(--accent);
+        }
+        .change-card .change-id {
+            font-size: 0.75em;
+            color: var(--accent);
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            margin-bottom: 6px;
+        }
+        .change-card .change-title {
+            font-weight: 700;
+            font-size: 0.92em;
+            margin-bottom: 4px;
+        }
+        .change-card .change-desc {
+            font-size: 0.8em;
+            color: var(--text-dim);
+        }
+        .change-card .change-tags {
+            display: flex;
+            gap: 6px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .change-tag {
+            font-size: 0.7em;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text-dim);
+        }
+        .change-tag.v02 { border-color: var(--purple); color: var(--purple); }
+        .change-tag.v03 { border-color: var(--green); color: var(--green); }
+        .change-tag.tech { border-color: var(--cyan); color: var(--cyan); }
+
+        /* ── Legend ── */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            padding: 12px 0;
+            font-size: 0.78em;
+            color: var(--text-dim);
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 3px;
+        }
+        .legend-dot.editor  { background: #00599C; }
+        .legend-dot.public  { background: #1a7f37; }
+        .legend-dot.core    { background: #1f6feb; }
+        .legend-dot.lua     { background: #00007f; }
+        .legend-dot.plat    { background: #9e6a03; }
+
+        /* ── Footer ── */
+        .footer {
+            text-align: center;
+            padding: 32px 20px;
+            color: var(--text-dim);
+            font-size: 0.8em;
+            border-top: 1px solid var(--border);
+            margin-top: 40px;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 600px) {
+            .header { padding: 14px 16px; }
+            .header h1 { font-size: 1.2em; }
+            .container { padding: 12px 10px; }
+            .layer-body { gap: 4px; }
+            .module { font-size: 0.75em; padding: 6px 10px; }
+            .changes-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!--  HEADER                                                         -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="header">
+    <h1>🏗️ ChaosEngine 总体架构图</h1>
+    <div class="meta">
+        <span class="badge badge-c">C99 内核</span>
+        <span class="badge badge-cpp">C++17 编辑器</span>
+        <span class="badge badge-lua">Lua 脚本</span>
+        <span class="badge badge-ver">v0.3-dev</span>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!--  图例                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <div class="legend">
+        <div class="legend-item"><span class="legend-dot editor"></span> C++17 编辑器层</div>
+        <div class="legend-item"><span class="legend-dot public"></span> public_api (纯 C 头文件)</div>
+        <div class="legend-item"><span class="legend-dot core"></span> C99 引擎内核</div>
+        <div class="legend-item"><span class="legend-dot lua"></span> Lua 脚本层</div>
+        <div class="legend-item"><span class="legend-dot plat"></span> 平台抽象层</div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!--  双栏布局：左侧架构分层 + 右侧进程拓扑                        -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <div class="two-col">
+
+        <!-- ─── 左侧：架构分层 ─── -->
+        <div>
+
+            <div class="section-title">
+                <span class="icon">📐</span> 架构分层
+            </div>
+
+            <div class="arch-layers">
+
+                <!-- 编辑器层 -->
+                <div class="layer layer-editor">
+                    <div class="layer-header">
+                        编辑器层 <span class="lang-tag">C++17</span>
+                    </div>
+                    <div class="layer-body">
+                        <div class="module module-editor">
+                            <div class="mod-name">Dear ImGui</div>
+                            <div class="mod-detail">UI 框架</div>
+                        </div>
+                        <div class="module module-editor">
+                            <div class="mod-name">Importer</div>
+                            <div class="mod-detail">资源导入</div>
+                        </div>
+                        <div class="module module-editor">
+                            <div class="mod-name">Editor Logic</div>
+                            <div class="mod-detail">编辑逻辑</div>
+                        </div>
+                        <div class="module module-editor">
+                            <div class="mod-name">Log Observer</div>
+                            <div class="mod-detail">第八模式日志</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="layer-arrow">▼ extern "C" 调用 ▼</div>
+
+                <!-- public_api -->
+                <div class="layer layer-public">
+                    <div class="layer-header">
+                        public_api <span class="lang-tag">纯 C 头文件</span>
+                    </div>
+                    <div class="layer-body">
+                        <div class="module" style="border-left:3px solid var(--green);">
+                            <div class="mod-name">ce_engine.h</div>
+                            <div class="mod-detail">引擎生命周期</div>
+                        </div>
+                        <div class="module" style="border-left:3px solid var(--green);">
+                            <div class="mod-name">ce_ecs.h</div>
+                            <div class="mod-detail">ECS 接口</div>
+                        </div>
+                        <div class="module" style="border-left:3px solid var(--green);">
+                            <div class="mod-name">ce_render.h</div>
+                            <div class="mod-detail">渲染接口</div>
+                        </div>
+                        <div class="module" style="border-left:3px solid var(--green);">
+                            <div class="mod-name">ce_network.h</div>
+                            <div class="mod-detail">网络接口</div>
+                        </div>
+                        <div class="module" style="border-left:3px solid var(--green);">
+                            <div class="mod-name">ce_plugin.h</div>
+                            <div class="mod-detail">插件接口</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="layer-arrow">▼ 引擎内核实现 ▼</div>
+
+                <!-- 引擎内核 -->
+                <div class="layer layer-core">
+                    <div class="layer-header">
+                        引擎内核 <span class="lang-tag">纯 C99</span>
+                    </div>
+                    <div class="layer-body">
+                        <div class="module module-core">
+                            <div class="mod-name">Core</div>
+                            <div class="mod-detail">Math / Memory / Log</div>
+                        </div>
+                        <div class="module module-core">
+                            <div class="mod-name">ECS</div>
+                            <div class="mod-detail">Archetype 存储</div>
+                        </div>
+                        <div class="module module-core">
+                            <div class="mod-name">Render</div>
+                            <div class="mod-detail">RHI / Vulkan</div>
+                        </div>
+                        <div class="module module-net">
+                            <div class="mod-name">Network</div>
+                            <div class="mod-detail">TCP / UDP / KCP</div>
+                        </div>
+                        <div class="module module-net">
+                            <div class="mod-name">io_uring</div>
+                            <div class="mod-detail">异步 I/O</div>
+                        </div>
+                        <div class="module module-net">
+                            <div class="mod-name">eBPF</div>
+                            <div class="mod-detail">可观测性</div>
+                        </div>
+                        <div class="module module-core">
+                            <div class="mod-name">Plugin</div>
+                            <div class="mod-detail">7 状态状态机</div>
+                        </div>
+                        <div class="module module-core">
+                            <div class="mod-name">Script</div>
+                            <div class="mod-detail">Lua VM 嵌入</div>
+                        </div>
+                        <div class="module module-server">
+                            <div class="mod-name">Server</div>
+                            <div class="mod-detail">AOI / Cell</div>
+                        </div>
+                        <div class="module module-sync">
+                            <div class="mod-name">Sync</div>
+                            <div class="mod-detail">Game→DBProxy 同步</div>
+                        </div>
+                        <div class="module module-sync">
+                            <div class="mod-name">Save</div>
+                            <div class="mod-detail">定时/手动存档</div>
+                        </div>
+                        <div class="module module-sync">
+                            <div class="mod-name">DBProxy Client</div>
+                            <div class="mod-detail">二进制协议</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="layer-arrow">▼ Lua 运行时 ▼</div>
+
+                <!-- Lua 脚本层 -->
+                <div class="layer layer-lua">
+                    <div class="layer-header">
+                        Lua 脚本层 <span class="lang-tag">Lua</span>
+                    </div>
+                    <div class="layer-body">
+                        <div class="module module-lua">
+                            <div class="mod-name">Admin Web</div>
+                            <div class="mod-detail">Lapis HTTP 管理后台</div>
+                        </div>
+                        <div class="module module-lua">
+                            <div class="mod-name">DBProxy</div>
+                            <div class="mod-detail">数据库代理 + 主备</div>
+                        </div>
+                        <div class="module module-lua">
+                            <div class="mod-name">Shared</div>
+                            <div class="mod-detail">combat 战斗逻辑</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="layer-arrow">▼ 跨平台 ▼</div>
+
+                <!-- 平台抽象层 -->
+                <div class="layer layer-platform">
+                    <div class="layer-header">
+                        平台抽象层 <span class="lang-tag">跨平台</span>
+                    </div>
+                    <div class="layer-body">
+                        <div class="module" style="border-left:3px solid var(--orange);">
+                            <div class="mod-name">🪟 Windows</div>
+                        </div>
+                        <div class="module" style="border-left:3px solid var(--orange);">
+                            <div class="mod-name">🐧 Linux</div>
+                        </div>
+                        <div class="module" style="border-left:3px solid var(--orange);">
+                            <div class="mod-name">🍎 macOS</div>
+                        </div>
+                        <div class="module" style="border-left:3px solid var(--orange);">
+                            <div class="mod-name">📱 iOS</div>
+                        </div>
+                        <div class="module" style="border-left:3px solid var(--orange);">
+                            <div class="mod-name">🤖 Android</div>
+                        </div>
+                    </div>
+                </div>
+
+            </div><!-- /arch-layers -->
+
+        </div><!-- /左侧 -->
+
+        <!-- ─── 右侧：进程拓扑 ─── -->
+        <div>
+
+            <div class="section-title">
+                <span class="icon">🌐</span> 进程拓扑
+            </div>
+
+            <div class="topo-card">
+
+                <!-- 机器 A -->
+                <div class="machine">
+                    <div class="machine-label">🖥️ 机器 A — Game Server</div>
+                    <div class="proc-row">
+                        <div class="proc primary">
+                            <div class="proc-name">🎮 chaos_game (Game A)</div>
+                            <div class="proc-role">主游戏进程</div>
+                            <div class="proc-port">:7777 客户端连接</div>
+                            <div class="proc-port">:9001 → DBProxy(主) 状态同步</div>
+                            <div class="proc-port">:9002 → DBProxy(主) 心跳</div>
+                        </div>
+                        <div class="proc backup">
+                            <div class="proc-name">🗄️ Lua DBProxy (备)</div>
+                            <div class="proc-role">待命 — 数据库代理</div>
+                            <div class="proc-port">:9003 数据库代理（待命）</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 连接箭头 -->
+                <div class="flow-arrows">
+                    <div class="flow-item">
+                        <span class="arrow-icon">→</span>
+                        <span>Game A</span>
+                        <span class="arrow-icon">→</span>
+                        <span>DBProxy(主)</span>
+                        <span class="arrow-label">TCP :9001</span>
+                        <span>实时状态同步（单向推送）</span>
+                    </div>
+                    <div class="flow-item">
+                        <span class="arrow-icon">→</span>
+                        <span>Game A</span>
+                        <span class="arrow-icon">→</span>
+                        <span>DBProxy(主)</span>
+                        <span class="arrow-label">TCP :9002</span>
+                        <span>心跳检测（1s 间隔）</span>
+                    </div>
+                    <div class="flow-item">
+                        <span class="arrow-icon">→</span>
+                        <span>DBProxy(主)</span>
+                        <span class="arrow-icon">→</span>
+                        <span>DBProxy(备)</span>
+                        <span class="arrow-label">TCP</span>
+                        <span>主备心跳（故障切换）</span>
+                    </div>
+                </div>
+
+                <!-- 机器 B -->
+                <div class="machine">
+                    <div class="machine-label">🖥️ 机器 B — DB Server</div>
+                    <div class="proc-row">
+                        <div class="proc primary">
+                            <div class="proc-name">🗄️ Lua DBProxy (主)</div>
+                            <div class="proc-role">状态镜像管理 + 数据库代理</div>
+                            <div class="proc-port">:9001 状态同步接收</div>
+                            <div class="proc-port">:9003 数据库代理（活跃）</div>
+                        </div>
+                        <div class="proc primary">
+                            <div class="proc-name">🍃 MongoDB</div>
+                            <div class="proc-role">数据持久化</div>
+                            <div class="proc-port">:27017 Primary</div>
+                            <div class="proc-port">:27018 Secondary</div>
+                            <div class="proc-port">:27019 Arbiter</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 存档流 -->
+                <div class="flow-arrows">
+                    <div class="flow-item">
+                        <span class="arrow-icon">→</span>
+                        <span>DBProxy(主)</span>
+                        <span class="arrow-icon">→</span>
+                        <span>MongoDB</span>
+                        <span class="arrow-label">:27017</span>
+                        <span>定时存档（5min）+ 手动存档</span>
+                    </div>
+                    <div class="flow-item" style="color: var(--red);">
+                        <span>⚠️ Game A 宕机 → DBProxy(主) 自动将内存备份存档到 MongoDB</span>
+                    </div>
+                    <div class="flow-item" style="color: var(--orange);">
+                        <span>⚠️ DBProxy(主) 宕机 → Game A 切到本机 DBProxy(备)</span>
+                    </div>
+                </div>
+
+            </div><!-- /topo-card -->
+
+            <!-- 数据流说明 -->
+            <div class="topo-card" style="margin-top: 16px;">
+                <h3>📊 数据流</h3>
+                <div class="flow-arrows" style="border-style: solid;">
+                    <div class="flow-item">
+                        <span class="arrow-icon">①</span>
+                        <span>每帧 SyncFrame → DBProxy(主) 内存镜像（实时备份）</span>
+                    </div>
+                    <div class="flow-item">
+                        <span class="arrow-icon">②</span>
+                        <span>定时器触发 → ce_save → DBProxy → MongoDB（持久化）</span>
+                    </div>
+                    <div class="flow-item">
+                        <span class="arrow-icon">③</span>
+                        <span>玩家登录 → ce_dbproxy_load → DBProxy → MongoDB → 恢复实体</span>
+                    </div>
+                    <div class="flow-item">
+                        <span class="arrow-icon">④</span>
+                        <span>Admin 命令 → ce_admin_ipc → JSON-RPC 2.0 → 运行时查询</span>
+                    </div>
+                </div>
+            </div>
+
+        </div><!-- /右侧 -->
+
+    </div><!-- /two-col -->
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!--  OpenSpec Changes                                           -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <div class="section-title">
+        <span class="icon">📋</span> OpenSpec Changes
+    </div>
+
+    <div class="changes-grid">
+
+        <div class="change-card">
+            <div class="change-id">render-vulkan-complete</div>
+            <div class="change-title">Vulkan RHI 完整化 + Server AOI/Cell</div>
+            <div class="change-desc">补全 Vulkan 后端纹理/着色器/管线；实现十字链表 AOI 和 Cell 大地图管理</div>
+            <div class="change-tags">
+                <span class="change-tag v02">v0.2</span>
+                <span class="change-tag">Render</span>
+                <span class="change-tag">Server</span>
+            </div>
+        </div>
+
+        <div class="change-card">
+            <div class="change-id">admin-web-backend</div>
+            <div class="change-title">Web 管理后台</div>
+            <div class="change-desc">Lapis HTTP + IPC 通信 + 仪表盘；独立 chaos_admin 进程，JSON-RPC 2.0 协议</div>
+            <div class="change-tags">
+                <span class="change-tag v02">v0.2</span>
+                <span class="change-tag">Admin</span>
+                <span class="change-tag">Lua</span>
+            </div>
+        </div>
+
+        <div class="change-card">
+            <div class="change-id">io-uring-ebpf</div>
+            <div class="change-title">io_uring 异步 I/O + eBPF 可观测性</div>
+            <div class="change-desc">异步 I/O 抽象层（io_uring/POSIX fallback）；kprobe/tracepoint eBPF 延迟追踪</div>
+            <div class="change-tags">
+                <span class="change-tag v02">v0.2</span>
+                <span class="change-tag tech">Network</span>
+                <span class="change-tag tech">eBPF</span>
+            </div>
+        </div>
+
+        <div class="change-card">
+            <div class="change-id">add-game-cluster-save</div>
+            <div class="change-title">Game 实时备份 + DBProxy 主备 + 存档</div>
+            <div class="change-desc">进程间状态同步、DBProxy 主备切换、定时/手动存档、玩家登录加载</div>
+            <div class="change-tags">
+                <span class="change-tag v03">v0.3</span>
+                <span class="change-tag">Sync</span>
+                <span class="change-tag">Save</span>
+                <span class="change-tag">DBProxy</span>
+            </div>
+        </div>
+
+        <div class="change-card">
+            <div class="change-id">test-openspec-integration</div>
+            <div class="change-title">OpenSpec 集成测试</div>
+            <div class="change-desc">测试 OpenSpec 与 Hermes Agent 的集成工作流</div>
+            <div class="change-tags">
+                <span class="change-tag">Test</span>
+                <span class="change-tag">CI</span>
+            </div>
+        </div>
+
+    </div>
+
+</div><!-- /container -->
+
+<div class="footer">
+    <p>ChaosEngine — 面向 3D 多人游戏的、客户端/服务器同构的、纯 C 内核 + Lua 脚本的轻量级开源游戏引擎</p>
+    <p style="margin-top:4px;">MIT License · Made by zhongfangdao</p>
+</div>
+
+</body>
+</html>

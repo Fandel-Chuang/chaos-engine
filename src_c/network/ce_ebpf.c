@@ -258,4 +258,18 @@ CeBool ce_ebpf_available(void) {
     return (access("/sys/kernel/btf/vmlinux", F_OK) == 0) ? CE_TRUE : CE_FALSE;
 }
 
+#else /* !CHAOS_HAS_EBPF — stubs */
+
+#include "network/ce_ebpf.h"
+
+CeEbpfContext* ce_ebpf_init(void) { return NULL; }
+void ce_ebpf_shutdown(CeEbpfContext* ctx) { (void)ctx; }
+CeResult ce_ebpf_trace_function(CeEbpfContext* ctx, const char* func_name) { (void)ctx; (void)func_name; return CE_ERR; }
+int ce_ebpf_dump_latency(CeEbpfContext* ctx, const char* func_name) { (void)ctx; (void)func_name; return 0; }
+CeResult ce_ebpf_trace_tcp_retransmit(CeEbpfContext* ctx) { (void)ctx; return CE_ERR; }
+int ce_ebpf_get_retransmit_count(CeEbpfContext* ctx) { (void)ctx; return 0; }
+CeResult ce_ebpf_trace_io_latency(CeEbpfContext* ctx) { (void)ctx; return CE_ERR; }
+void ce_ebpf_get_io_latency_stats(CeEbpfContext* ctx, int* p50, int* p90, int* p99) { (void)ctx; *p50 = *p90 = *p99 = 0; }
+CeBool ce_ebpf_available(void) { return CE_FALSE; }
+
 #endif /* CHAOS_HAS_EBPF */

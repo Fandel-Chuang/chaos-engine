@@ -1,0 +1,41 @@
+# ChaosEngine OpenSpec Configuration
+schema: chaos-engine
+
+context: |
+  ## ChaosEngine — 开源游戏引擎
+
+  **架构**: 纯C内核 + C++编辑器 + Lua脚本，三层隔离
+  **ECS**: Archetype 模式
+  **网络**: 客户端/服务器同构战斗逻辑（帧同步 + 状态同步）
+  **渲染**: Vulkan 后端，3D 优先
+  **平台**: Win/Linux/macOS/iOS/Android
+  **参考**: Skynet (Actor模型), KBEngine (Cell/AOI), Ant Engine (ECS), UE (属性复制)
+
+  **代码仓库**: https://gitee.com/zhong-fangdao/chaos-engine
+  **开发风格**: Spec 先行 — 先讨论对齐需求 → 写设计规格说明书 → 确认后动手
+
+  **目录结构**:
+  - src_c/        — C 内核（ecs, network, runtime, render, physics, admin_ipc）
+  - src_cpp/      — C++ 编辑器层
+  - src_lua/      — Lua 脚本层（admin Web 后台, game logic）
+  - docs/spec/    — 设计规格说明书
+  - scripts/      — 工具脚本
+  - third_party/  — 第三方依赖
+
+rules:
+  proposal:
+    - 用中文撰写
+    - 明确 MVP 范围和验收标准
+    - 标注对现有模块的影响
+  specs:
+    - 使用 SHALL/MUST 规范语言
+    - 每个 Requirement 至少一个 Scenario
+    - 区分 ADDED/MODIFIED/REMOVED
+  design:
+    - 包含架构图（ASCII art 或文字描述）
+    - 关键决策必须附带理由和替代方案
+    - 标注跨平台注意事项
+  tasks:
+    - 按依赖顺序排列
+    - 每个 task 可在一个 session 内完成
+    - 标注编译验证点

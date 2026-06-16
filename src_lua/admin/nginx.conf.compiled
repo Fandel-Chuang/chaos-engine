@@ -1,0 +1,32 @@
+env LAPIS_ENVIRONMENT=development;
+worker_processes 1;
+error_log logs/error.log notice;
+daemon off;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    lua_package_path "/home/zhongfangdao/chaos-engine/src_lua/?.lua;/home/zhongfangdao/chaos-engine/src_lua/?/init.lua;;";
+
+    init_by_lua_block {
+        require("lpeg")
+    }
+
+    server {
+        listen 9090;
+        lua_code_cache on;
+
+        location / {
+            default_type text/html;
+            content_by_lua_block {
+                require("lapis").serve("admin.app")
+            }
+        }
+
+        location /static/ {
+            alias static/;
+        }
+    }
+}

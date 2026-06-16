@@ -64,9 +64,21 @@ if(WIN32)
 elseif(UNIX AND NOT APPLE)
     target_link_libraries(engine_core PRIVATE m pthread dl ${LUA_LIB_DIR}/liblua5.4.so)
 
-    # io_uring 检测
-    find_package(PkgConfig QUIET)
-    if(PKG_CONFIG_FOUND)
+    if(LINUX)
+        # eBPF: Linux 5.x+ 自动启用
+        find_package(PkgConfig QUIET)
+        if(PKG_CONFIG_FOUND)
+            pkg_check_modules(LIBBPF libbpf)
+            if(LIBBPF_FOUND)
+                target_compile_definitions(engine_core PRIVATE CHAOS_HAS_EBPF)
+                target_include_directories(engine_core PRIVATE ${LIBBPF_INCLUDE_DIRS})
+                target_link_libraries(engine_core PRIVATE ${LIBBPF_LIBRARIES})
+                message(STATUS "eBPF: enabled (libbpf ${LIBBPF_VERSION})")
+            else()
+                message(STATUS "eBPF: disabled (libbpf not found)")
+            endif()
+        endif()
+
         pkg_check_modules(LIBURING liburing)
         if(LIBURING_FOUND)
             target_compile_definitions(engine_core PRIVATE CHAOS_HAS_IO_URING)
@@ -153,9 +165,88 @@ target_link_libraries(chaos_async_echo PRIVATE engine_core)
 set_target_properties(chaos_async_echo PROPERTIES LINKER_LANGUAGE C)
 
 # ============================================================
+# io_uring 异步 I/O 性能基准测试服务器
+# ============================================================
+# 支持 2048 并发连接，可配置端口，静默模式
+add_executable(chaos_async_bench
+    runtime/ce_async_bench_server.c
+)
+target_include_directories(chaos_async_bench PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(chaos_async_bench PRIVATE engine_core)
+set_target_properties(chaos_async_bench PROPERTIES LINKER_LANGUAGE C)
+
+# POSIX-only 版本（强制禁用 io_uring，用于对比基准测试）
+# 用法: cmake -DBUILD_POSIX_BENCH=ON ..
+option(BUILD_POSIX_BENCH "Build POSIX-only benchmark server (no io_uring)" OFF)
+if(BUILD_POSIX_BENCH)
+    # 收集除 ce_async_uring.c 之外的所有源文件
+    file(GLOB_RECURSE ENGINE_CORE_POSIX_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/core/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/ecs/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/log/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/plugin/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/render/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/network/ce_network.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/network/ce_async_posix.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/network/ce_ebpf.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/script/*.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/ce_engine.c"
+    )
+    add_library(engine_core_posix STATIC ${ENGINE_CORE_POSIX_SOURCES})
+    set_source_files_properties(${ENGINE_CORE_POSIX_SOURCES} PROPERTIES LANGUAGE C)
+    target_include_directories(engine_core_posix
+        PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/public_api
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+                ${CMAKE_CURRENT_SOURCE_DIR}/core
+                ${CMAKE_CURRENT_SOURCE_DIR}/ecs
+                ${CMAKE_CURRENT_SOURCE_DIR}/log
+                ${CMAKE_CURRENT_SOURCE_DIR}/plugin
+                ${CMAKE_CURRENT_SOURCE_DIR}/render
+                ${CMAKE_CURRENT_SOURCE_DIR}/network
+                ${CMAKE_CURRENT_SOURCE_DIR}/script
+                ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+                ${VULKAN_HEADERS_DIR}
+                ${X11_HEADERS_DIR}
+                ${LUA_HEADERS_DIR}
+    )
+    target_compile_options(engine_core_posix PRIVATE
+        $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration>
+        $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic>
+    )
+    target_link_libraries(engine_core_posix PRIVATE m pthread dl ${LUA_LIB_DIR}/liblua5.4.so)
+    # eBPF support (same as engine_core)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(LIBBPF libbpf)
+        if(LIBBPF_FOUND)
+            target_compile_definitions(engine_core_posix PRIVATE CHAOS_HAS_EBPF)
+            target_include_directories(engine_core_posix PRIVATE ${LIBBPF_INCLUDE_DIRS})
+            target_link_libraries(engine_core_posix PRIVATE ${LIBBPF_LIBRARIES})
+        endif()
+    endif()
+    set_target_properties(engine_core_posix PROPERTIES LINKER_LANGUAGE C)
+
+    add_executable(chaos_async_bench_posix
+        runtime/ce_async_bench_server.c
+    )
+    target_include_directories(chaos_async_bench_posix PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(chaos_async_bench_posix PRIVATE engine_core_posix)
+    set_target_properties(chaos_async_bench_posix PROPERTIES LINKER_LANGUAGE C)
+endif()
+
+# ============================================================
 # 服务端模块 (AOI + Cell)
 # ============================================================
 add_subdirectory(server)
+
+# ============================================================
+# 同步模块 (Game↔DBProxy)
+# ============================================================
+add_subdirectory(sync)
 
 # ============================================================
 # TCP 回显服务器可执行文件
@@ -166,5 +257,17 @@ add_executable(chaos_server
 target_include_directories(chaos_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_link_libraries(chaos_server PRIVATE engine_core engine_server)
+target_link_libraries(chaos_server PRIVATE engine_core engine_server engine_admin_ipc engine_sync)
 set_target_properties(chaos_server PROPERTIES LINKER_LANGUAGE C)
+
+# 传递 io_uring 宏给 chaos_server（ce_server_main.c 需要）
+if(CHAOS_USE_IO_URING AND LIBURING_FOUND)
+    target_compile_definitions(chaos_server PRIVATE CHAOS_HAS_IO_URING)
+    target_include_directories(chaos_server PRIVATE ${LIBURING_INCLUDE_DIRS})
+    target_link_libraries(chaos_server PRIVATE ${LIBURING_LIBRARIES})
+endif()
+
+# ============================================================
+# Admin IPC 模块
+# ============================================================
+add_subdirectory(admin_ipc)

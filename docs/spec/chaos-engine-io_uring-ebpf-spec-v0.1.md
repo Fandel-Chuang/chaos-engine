@@ -1,8 +1,44 @@
 # ChaosEngine io_uring + eBPF 技术分析规格书 v0.1
 
-> **状态：** 草案 | **日期：** 2026-06-15 | **作者：** zhongfangdao
+> **状态：** 草案（Phase 1-3 已实现，Phase 4-5 延后） | **日期：** 2026-06-15（初稿）/ 2026-06-16（更新） | **作者：** zhongfangdao
 >
 > **主题：** Linux 高性能网络 I/O（io_uring）+ 可观测性/网络优化（eBPF），Windows 对应 iocp
+>
+> ---
+>
+> ## 实现状态（2026-06-16 更新）
+>
+> | Phase | 内容 | 状态 |
+> |-------|------|:----:|
+> | Phase 1 | io_uring 基础集成（ce_async_io.h, ce_async_uring.c, POSIX fallback） | ✅ 已完成 |
+> | Phase 2 | io_uring 高级特性（Registered Buffers, ZCRX, 批量提交） | ✅ 已完成 |
+> | Phase 3 | eBPF 可观测性（kprobe 延迟追踪, TCP 重传监控, I/O 延迟直方图） | ✅ 已完成 |
+> | Phase 4 | eBPF 网络优化（XDP, BPF Stream Parser, BPF LSM） | ⏳ 延后 |
+> | Phase 5 | 集成与文档（服务端主循环切换, 性能测试, 用户/开发者文档） | 🔧 部分完成 |
+>
+> **已实现文件：**
+> - `src_c/network/ce_async_io.h` — 异步 I/O 抽象层接口
+> - `src_c/network/ce_async_uring.c` — io_uring 后端（257 行）
+> - `src_c/network/ce_async_posix.c` — POSIX fallback（240 行）
+> - `src_c/network/ce_ebpf.h` — eBPF 可观测性接口
+> - `src_c/network/ce_ebpf.c` — eBPF 用户态加载器（275 行）
+> - `src_c/network/ce_ebpf_kern.c` — BPF 内核态程序（152 行）
+> - `src_c/runtime/ce_async_echo_main.c` — io_uring Echo 测试
+> - `src_c/runtime/ce_ebpf_test_main.c` — eBPF 可观测性测试
+>
+> **文档：**
+> - `docs/io_uring-ebpf-usage.md` — 用户使用文档
+> - `docs/io_uring-ebpf-dev.md` — 开发者文档
+> - `openspec/changes/io-uring-ebpf/` — 变更提案/设计/任务/规格
+>
+> **API 差异（实现 vs 原始设计）：**
+> - `ce_ebpf_init()` 返回 `CeEbpfContext*`（非 `CeResult`），失败返回 NULL
+> - `ce_ebpf_trace_function()` 增加 `CeEbpfContext* ctx` 参数
+> - `ce_ebpf_dump_latency()` 增加 `CeEbpfContext* ctx` 参数，返回 `int`（采样数）
+> - `ce_ebpf_get_io_latency_stats()` 增加 `CeEbpfContext* ctx` 参数
+> - 新增 `ce_async_backend_name()` 函数（调试用）
+>
+> ---
 
 ---
 
