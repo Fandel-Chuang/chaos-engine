@@ -337,6 +337,32 @@ target_link_libraries(chaos_router PRIVATE engine_core)
 set_target_properties(chaos_router PROPERTIES LINKER_LANGUAGE C)
 
 # ============================================================
+# Gateway 进程可执行文件 (Lua 驱动)
+# ============================================================
+add_executable(chaos_gateway
+    runtime/ce_gateway_main.c
+)
+target_include_directories(chaos_gateway PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LUA_HEADERS_DIR}
+)
+target_link_libraries(chaos_gateway PRIVATE engine_core)
+set_target_properties(chaos_gateway PROPERTIES LINKER_LANGUAGE C)
+
+# ============================================================
+# DBProxy 进程可执行文件 (Lua 驱动)
+# ============================================================
+add_executable(chaos_dbproxy
+    runtime/ce_dbproxy_main.c
+)
+target_include_directories(chaos_dbproxy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LUA_HEADERS_DIR}
+)
+target_link_libraries(chaos_dbproxy PRIVATE engine_core)
+set_target_properties(chaos_dbproxy PROPERTIES LINKER_LANGUAGE C)
+
+# ============================================================
 # Admin IPC 模块
 # ============================================================
 add_subdirectory(admin_ipc)
