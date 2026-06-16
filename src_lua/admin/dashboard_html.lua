@@ -827,7 +827,7 @@ function connectWebSocket() {
     ws.onopen = function() {
         console.log('WebSocket connected (attempt ' + (reconnectAttempt + 1) + ')');
         reconnectAttempt = 0;  // Reset on successful connection
-        setConnectionStatus(true);
+        setConnectionStatus(true, '已连接 (WS)');
         startHeartbeat();
 
         // Pause HTTP polling since WebSocket is active
@@ -917,12 +917,12 @@ function stopHeartbeat() {
     }
 }
 
-function setConnectionStatus(connected) {
+function setConnectionStatus(connected, via) {
     var dot = $('status-dot');
     var text = $('status-text');
     if (connected) {
         dot.className = 'status-dot connected';
-        text.textContent = '已连接 (WS)';
+        text.textContent = via || '已连接';
     } else {
         dot.className = 'status-dot disconnected';
         text.textContent = '未连接';
@@ -1444,7 +1444,12 @@ function startPolling() {
         if (ws && ws.readyState === WebSocket.OPEN) return; // WS active, skip
 
         fetch('/api/stats').then(function(r) { return r.json(); })
-            .then(function(resp) { if (resp.ok && resp.data) updateStats(resp.data); })
+            .then(function(resp) {
+                if (resp.ok && resp.data) {
+                    updateStats(resp.data);
+                    setConnectionStatus(true, '已连接 (HTTP)');
+                }
+            })
             .catch(function() {});
         fetch('/api/aoi').then(function(r) { return r.json(); })
             .then(function(resp) { if (resp.ok && resp.data) updateAoi(resp.data); })

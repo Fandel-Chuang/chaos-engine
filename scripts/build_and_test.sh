@@ -99,15 +99,71 @@ if [ $RUN_TESTS -eq 1 ]; then
         fi
     done
 
-    # 4.2 验证 chaos_server 能启动并正常退出
+    # 4.2 验证 chaos_server 能启动并正常退出（带 admin IPC）
     if [ -f "${BUILD_DIR}/bin/chaos_server" ]; then
-        echo "  🚀 启动 chaos_server..."
-        timeout 3 "${BUILD_DIR}/bin/chaos_server" --headless 2>&1 || true
+        echo "  🚀 启动 chaos_server (--admin)..."
+        timeout 3 "${BUILD_DIR}/bin/chaos_server" --admin 2>&1 || true
         echo "  ✅ chaos_server 启动/退出正常"
         SMOKE_PASS=$((SMOKE_PASS + 1))
     fi
 
-    # 4.3 验证关键测试通过
+    # 4.3 Admin 后台冒烟测试
+    echo "  🌐 Admin 后台测试..."
+    ADMIN_PASS=0
+
+    # 清理旧 socket，启动 server
+    rm -f /tmp/chaos_admin.sock
+    "${BUILD_DIR}/bin/chaos_server" --admin &
+    ADMIN_SRV_PID=$!
+    sleep 1
+
+    # 等待 socket 就绪
+    for i in $(seq 1 20); do
+        if [ -S /tmp/chaos_admin.sock ]; then break; fi
+        sleep 0.1
+    done
+
+    if [ -S /tmp/chaos_admin.sock ]; then
+        echo "  ✅ Admin socket 就绪"
+
+        # 启动 Lapis admin (cqueues 模式)
+        cd "${PROJECT_DIR}/src_lua/admin"
+        lapis server &
+        LAPIS_PID=$!
+        sleep 2
+
+        # 测试 API 端点
+        for endpoint in health stats aoi cell network memory cpu render system; do
+            if curl -sf "http://localhost:9090/api/${endpoint}" > /dev/null 2>&1; then
+                echo "  ✅ GET /api/${endpoint}"
+                ADMIN_PASS=$((ADMIN_PASS + 1))
+            else
+                echo "  ⚠️  GET /api/${endpoint} 不可用"
+            fi
+        done
+
+        # 测试主页
+        if curl -sf "http://localhost:9090/" > /dev/null 2>&1; then
+            echo "  ✅ GET / (Dashboard HTML)"
+            ADMIN_PASS=$((ADMIN_PASS + 1))
+        fi
+
+        # 清理 admin 进程
+        kill $LAPIS_PID 2>/dev/null || true
+        cd "${PROJECT_DIR}"
+    else
+        echo "  ⚠️  Admin socket 未创建，跳过 API 测试"
+    fi
+
+    # 停止 server
+    kill $ADMIN_SRV_PID 2>/dev/null || true
+    wait $ADMIN_SRV_PID 2>/dev/null || true
+    rm -f /tmp/chaos_admin.sock
+
+    echo "  Admin 测试: ${ADMIN_PASS} 端点可用"
+    SMOKE_PASS=$((SMOKE_PASS + ADMIN_PASS))
+
+    # 4.4 验证关键测试通过
     for test_name in math memory ecs network aoi cell net_base; do
         if ctest -R "^${test_name}$" --output-on-failure 2>&1 | grep -q "Passed"; then
             echo "  ✅ test_${test_name} 通过"

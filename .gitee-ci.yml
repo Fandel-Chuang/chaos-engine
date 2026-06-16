@@ -44,7 +44,7 @@ jobs:
   smoke-test:
     name: 冒烟测试
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     needs: build-and-test
 
     steps:
@@ -57,9 +57,14 @@ jobs:
           sudo apt-get install -y -qq \
             cmake build-essential \
             liblua5.4-dev liburing-dev libbpf-dev \
-            clang llvm
+            clang llvm luarocks
 
-      - name: 冒烟测试
+      - name: 安装 Lapis
+        run: |
+          sudo luarocks install lapis
+          sudo luarocks install lua-cjson
+
+      - name: 冒烟测试 (含 Admin 后台)
         run: |
           chmod +x scripts/build_and_test.sh
           ./scripts/build_and_test.sh --no-test
