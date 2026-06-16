@@ -41,6 +41,14 @@
 #define RECV_BUFFER_SIZE         65536
 #define MAX_LOG_LINES_DEFAULT    50
 #define MAX_TOP_ENTITIES         10
+#define MAX_CUSTOM_HANDLERS      8
+
+/* ---- 全局自定义处理器（供 process_request 访问） ---- */
+
+static CeAdminIpcHandler   g_custom_handlers[MAX_CUSTOM_HANDLERS];
+static void*               g_custom_handler_data[MAX_CUSTOM_HANDLERS];
+static int                 g_custom_handler_count = 0;
+static pthread_mutex_t     g_handler_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ---- 内部结构 ---- */
 
@@ -1140,10 +1148,45 @@ static int process_request(const char* request_json, char* response_buf, int max
         return handle_system(response_buf, max_len, id_str);
     } else if (strcmp(method, "health") == 0) {
         return handle_health(response_buf, max_len, id_str);
-    } else {
-        return json_rpc_error(response_buf, max_len, id_str,
-                              -32601, "Method not found");
     }
+
+    /* 尝试自定义处理器 */
+    pthread_mutex_lock(&g_handler_mutex);
+    for (int i = 0; i < g_custom_handler_count; i++) {
+        if (g_custom_handlers[i]) {
+            int result = g_custom_handlers[i](method, params_json,
+                                               id_str, response_buf, max_len,
+                                               g_custom_handler_data[i]);
+            if (result > 0) {
+                pthread_mutex_unlock(&g_handler_mutex);
+                return result;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_handler_mutex);
+
+    return json_rpc_error(response_buf, max_len, id_str,
+                          -32601, "Method not found");
+}
+
+/* ---- 自定义处理器注册 ---- */
+
+CeResult ce_admin_ipc_register_handler(CeAdminIpc* ipc,
+                                        CeAdminIpcHandler handler,
+                                        void* user_data) {
+    (void)ipc; /* 全局注册，ipc 参数保留用于未来扩展 */
+    if (!handler) return CE_ERR;
+
+    pthread_mutex_lock(&g_handler_mutex);
+    if (g_custom_handler_count >= MAX_CUSTOM_HANDLERS) {
+        pthread_mutex_unlock(&g_handler_mutex);
+        return CE_ERR;
+    }
+    g_custom_handlers[g_custom_handler_count] = handler;
+    g_custom_handler_data[g_custom_handler_count] = user_data;
+    g_custom_handler_count++;
+    pthread_mutex_unlock(&g_handler_mutex);
+    return CE_OK;
 }
 
 /* ---- Socket 操作 ---- */

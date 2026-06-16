@@ -249,6 +249,11 @@ add_subdirectory(server)
 add_subdirectory(sync)
 
 # ============================================================
+# DBProxy 客户端模块
+# ============================================================
+add_subdirectory(dbproxy)
+
+# ============================================================
 # TCP 回显服务器可执行文件
 # ============================================================
 add_executable(chaos_server
@@ -257,7 +262,7 @@ add_executable(chaos_server
 target_include_directories(chaos_server PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_link_libraries(chaos_server PRIVATE engine_core engine_server engine_admin_ipc engine_sync)
+target_link_libraries(chaos_server PRIVATE engine_core engine_server engine_admin_ipc engine_sync engine_dbproxy engine_save)
 set_target_properties(chaos_server PROPERTIES LINKER_LANGUAGE C)
 
 # 传递 io_uring 宏给 chaos_server（ce_server_main.c 需要）
@@ -271,3 +276,8 @@ endif()
 # Admin IPC 模块
 # ============================================================
 add_subdirectory(admin_ipc)
+
+# ============================================================
+# 存档模块
+# ============================================================
+add_subdirectory(save)
