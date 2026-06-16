@@ -1,4 +1,4 @@
-# Tasks: Router 集群 — 服务发现 + 消息路由 + 微服务拆分
+# Tasks: Router 集群 — 服务发现 + 消息路由 + Game 进程按功能模块拆分
 
 > 按依赖顺序排列，Phase 1-4。全部待开始。
 
@@ -40,14 +40,14 @@
 
 ---
 
-## Phase 3: 微服务拆分（好友服务示例）
+## Phase 3: Game 进程按功能模块拆分（好友功能示例）
 
-- [ ] 3.1 创建 `src_lua/shared/` 目录，创建 `service_registry.lua`：封装微服务注册/注销/心跳逻辑 — `register(service_type, process_id, address)` 自动完成 TCP 连接、发送 REGISTER、处理 ACK、启动心跳协程；`deregister()` 发送 DEREGISTER 并关闭连接
-- [ ] 3.2 创建 `src_lua/shared/msg_router.lua`：封装微服务间消息通信 — `send(dst_service, dst_key, body)` 构造消息并发送到 Router、`request(dst_service, dst_key, body, timeout)` 发送请求并等待响应（支持超时）、`on_message(callback)` 注册消息处理回调
-- [ ] 3.3 定义微服务类型枚举：在 `src_lua/shared/service_types.lua` 中定义 `SERVICE_TYPE` 枚举（GAME=0x01, FRIEND=0x02, PVP=0x03, PVE=0x04, TRADE=0x05, GUILD=0x06, CHAT=0x07, MAIL=0x08）
-- [ ] 3.4 创建好友服务示例 `src_lua/services/friend/`：`init.lua`（入口，加载共享库，向 Router 注册）、`friend_logic.lua`（好友业务逻辑：添加/删除好友、好友列表、在线状态查询）、`friend_db.lua`（好友数据持久化，通过 DBProxy 读写）
-- [ ] 3.5 好友服务集成 DBProxy：好友服务进程启动时连接独立的 DBProxy 实例（端口 9013），使用数据库 `chaos_{game_id}_friend`，集合 `relationships`（好友关系）、`requests`（好友请求）
-- [ ] 3.6 编写好友服务集成测试：好友添加/删除流程、好友列表查询、跨进程在线状态查询（GAME → Router → FRIEND → Router → GAME）
+- [ ] 3.1 创建 `src_lua/services/` 目录，定义功能模块类型枚举：在 `src_lua/services/service_types.lua` 中定义 `SERVICE_TYPE` 枚举（GAME=0x01, FRIEND=0x02, PVP=0x03, PVE=0x04, TRADE=0x05, GUILD=0x06, CHAT=0x07, MAIL=0x08）
+- [ ] 3.2 实现 Game 进程内 `ce_rpc_call()` 函数：在引擎核心中提供 `ce_rpc_call()` 函数，封装与 Router 的通信（注册、消息发送、心跳）。Game 进程启动时自动向 Router 注册，业务脚本只需调用 `ce_rpc_call()` 即可与其他 Game 进程通信
+- [ ] 3.3 创建好友功能 Lua 业务脚本 `src_lua/services/friend.lua`：好友业务逻辑（添加/删除好友、好友列表、在线状态查询），通过 `ce_rpc_call()` 与其他 Game 进程通信
+- [ ] 3.4 创建好友 Game 进程配置示例 `config_friend.lua`：定义 `service_type = "FRIEND"`、`process_id`、`region`、`service_script = "services/friend.lua"`、Router 地址、DBProxy 地址。启动命令：`./chaos_game -c config_friend.lua`
+- [ ] 3.5 好友 Game 进程集成 DBProxy：进程启动时连接独立的 DBProxy 实例（端口 9013），使用数据库 `chaos_{game_id}_friend`，集合 `relationships`（好友关系）、`requests`（好友请求）
+- [ ] 3.6 编写好友功能集成测试：好友添加/删除流程、好友列表查询、跨进程在线状态查询（GAME → Router → FRIEND → Router → GAME），验证 `ce_rpc_call()` 通信正确性
 
 ---
 

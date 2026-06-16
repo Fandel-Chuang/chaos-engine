@@ -1,4 +1,4 @@
-# Design: Router 集群 — 服务发现 + 消息路由 + 微服务拆分
+# Design: Router 集群 — 服务发现 + 消息路由 + Game 进程按功能模块拆分
 
 ## Context
 
@@ -16,32 +16,32 @@ ChaosEngine v0.3 已具备以下能力：
 
 1. **无服务发现**：Gateway 通过静态配置转发消息，无法动态感知后端服务变化。
 2. **无服务间路由**：不同 Game 进程之间无法通信，所有逻辑耦合在单一进程中。
-3. **无微服务拆分基础设施**：缺乏统一的服务注册、消息路由、数据隔离机制。
+3. **无 Game 进程按功能模块拆分基础设施**：缺乏统一的服务注册、消息路由、数据隔离机制。
 4. **无跨区域通信**：多区域部署时无法跨区域转发消息。**全球同服多区部署是核心架构需求**，每个大区（亚洲区/欧洲区/美洲区）需独立部署完整集群，大区之间通过 Router 全球网格交互。
 5. **网络逻辑重复**：Gateway 和 Router 各自实现 TCP 连接管理、协议编解码、心跳检测，代码重复。
 
-本设计为 v0.4 引入 **Router 集群** + **ce_net_base 共享网络库** + **微服务拆分规范** 三大子系统，使 ChaosEngine 从单区域单进程进化为全球同服的分布式微服务架构。
+本设计为 v0.4 引入 **Router 集群** + **ce_net_base 共享网络库** + **Game 进程按功能模块拆分** 三大子系统，使 ChaosEngine 从单区域单进程进化为全球同服的分布式架构。
 
 ## Goals / Non-Goals
 
 **Goals:**
 
 1. **共享网络库 ce_net_base**：从 Gateway 抽离 TCP 连接管理、二进制协议编解码、心跳检测、连接池为独立 C 库，Gateway 和 Router 共享。
-2. **Router 服务注册与发现**：微服务进程启动时向 Router 注册，微服务间通过 Router 发现彼此。Gateway 直连 Game，不经过 Router。
-3. **一致性哈希消息路由**：按 player_id 一致性哈希将请求路由到目标微服务进程，支持进程扩缩容时的自动再均衡。
+2. **Router 服务注册与发现**：Game 进程启动时向 Router 注册，不同 Game 进程间通过 Router 发现彼此。Gateway 直连 Game，不经过 Router。
+3. **一致性哈希消息路由**：按 player_id 一致性哈希将请求路由到目标 Game 进程，支持进程扩缩容时的自动再均衡。
 4. **Router 集群**：区域内多 Router 实例组成集群，广播同步路由表，避免单点故障。
 5. **跨大区路由（核心能力）**：全球分多个大区（亚洲区/欧洲区/美洲区），每个大区独立部署完整集群。大区之间通过 Router 间 TCP 长连接组成全球 Router 网格，支持跨区消息路由（跨服 PVP、全球聊天、跨区交易）。跨区消息格式包含 source_region + target_region。
-6. **微服务拆分**：定义服务类型枚举，以好友服务为示例拆分为独立 Game 进程，通过 Router 通信。
-7. **数据隔离**：每个微服务连接独立 DBProxy 实例，使用独立数据库命名空间。
+6. **Game 进程按功能模块拆分**：定义功能模块类型枚举，以好友功能为示例拆分为独立 Game 进程实例（加载 `friend.lua` 业务脚本），通过 Router 通信。
+7. **数据隔离**：每个 Game 进程连接独立 DBProxy 实例，使用独立数据库命名空间。
 
 **Non-Goals:**
 
-- ❌ 不做微服务网格（Service Mesh）的 sidecar 模式 —— 当前通过 Router 集中路由。
+- ❌ 不做服务网格（Service Mesh）的 sidecar 模式 —— 当前通过 Router 集中路由。
 - ❌ 不做基于 Raft/Paxos 的 Router 集群强一致性 —— 当前使用广播同步（最终一致）。
-- ❌ 不做微服务动态扩缩容的自动触发（Auto-Scaling）—— 当前手动扩缩容。
+- ❌ 不做 Game 进程动态扩缩容的自动触发（Auto-Scaling）—— 当前手动扩缩容。
 - ❌ 不做跨区域数据同步（如跨区域 DBProxy 数据复制）—— 延后到 v0.5。
 - ❌ 不做消息优先级队列和流量控制 —— 延后到后续版本。
-- ❌ 不做微服务间的事务协调（Saga/TCC）—— 当前各微服务独立事务。
+- ❌ 不做 Game 进程间的事务协调（Saga/TCC）—— 当前各 Game 进程独立事务。
 
 ## Architecture
 
@@ -71,13 +71,13 @@ ChaosEngine v0.3 已具备以下能力：
 │                         直连 Game（不经过 Router）│                                      │
 │                                                ▼                                      │
 │  ┌──────────────────────────────────────────────────────────────────────────────┐    │
-│  │                      微服务层（Game 进程）                                      │    │
+│  │                       Game 进程层（同一个 chaos_game 二进制，加载不同 Lua 脚本）      │    │
 │  │                                                                               │    │
 │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌─────────┐  │    │
 │  │  │ Game/1001  │  │FRIEND/2001 │  │ PVP/3001   │  │ PVE/4001   │  │TRADE/   │  │    │
 │  │  │ 核心逻辑    │  │ 好友系统    │  │ 玩家对战    │  │ PVE内容    │  │5001     │  │    │
-│  │  │ ECS/AOI/   │  │            │  │            │  │            │  │ 交易系统 │  │    │
-│  │  │ Cell       │  │            │  │            │  │            │  │         │  │    │
+│  │  │ ECS/AOI/   │  │(friend.lua)│  │(pvp.lua)   │  │(pve.lua)   │  │(trade.  │  │    │
+│  │  │ Cell       │  │            │  │            │  │            │  │ lua)    │  │    │
 │  │  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘  └────┬────┘  │    │
 │  │        │               │               │               │              │       │    │
 │  │        │         Game↔Game 通信经 Router 中转            │              │       │    │
@@ -103,7 +103,7 @@ ChaosEngine v0.3 已具备以下能力：
 │           │  │        集群内广播同步路由表                                        │     │
 │           │  └──────────────────────────────────────────────────────────────────┘     │
 │           │                                                                           │
-│           │    各微服务连接独立 DBProxy                                                  │
+│           │    各 Game 进程连接独立 DBProxy                                                  │
 │           ▼               ▼               ▼               ▼              ▼            │
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌─────────┐         │
 │  │DBProxy(主) │  │DBProxy(主) │  │DBProxy(主) │  │DBProxy(主) │  │DBProxy  │         │
@@ -135,7 +135,7 @@ ChaosEngine v0.3 已具备以下能力：
 │  └────────┬────────┘  │  │  └────────┬────────┘  │  │                       │
 │           │           │  │           │           │  │                       │
 │  ┌────────┴────────┐  │  │  ┌────────┴────────┐  │  └───────────────────────┘
-│  │ Gateway + 微服务 │  │  │  │ Gateway + 微服务 │  │
+│  │ Gateway + Game 进程  │  │  │  │ Gateway + Game 进程  │  │
 │  │ DBProxy + MongoDB│  │  │  │ DBProxy + MongoDB│  │
 │  └─────────────────┘  │  │  └─────────────────┘  │
 │                       │  │                       │
@@ -145,7 +145,7 @@ ChaosEngine v0.3 已具备以下能力：
 
 全球 Router 网格: 3 个大区，全互联拓扑，共 3 条跨区 TCP 长连接
 跨区消息格式: {source_region, target_region, player_id, body}
-Gateway → Game 直连（客户端消息路径），Game ↔ Game 经 Router（微服务间通信）
+Gateway → Game 直连（客户端消息路径），Game ↔ Game 经 Router（Game 进程间通信）
 ```
 
 ### 模块分层
@@ -155,12 +155,12 @@ Gateway → Game 直连（客户端消息路径），Game ↔ Game 经 Router（
 │                        应用层                                      │
 │  ce_gateway_main.c  (Gateway 进程入口)                             │
 │  ce_router_main.c   (Router 进程入口)                              │
-│  ce_game_main.c     (微服务 Game 进程入口)                          │
+│  ce_game_main.c     (Game 进程入口，加载不同 Lua 业务脚本)              │
 ├──────────────────────────────────────────────────────────────────┤
 │                    Lua 业务层                                      │
 │  src_lua/gateway/   (连接管理、协议适配、消息转发直连 Game)          │
 │  src_lua/router/    (服务注册、一致性哈希、集群同步、健康检查)        │
-│  src_lua/shared/    (service_registry.lua, msg_router.lua)        │
+│  src_lua/services/  (功能模块 Lua 业务脚本: friend.lua, pvp.lua, trade.lua 等) │
 ├──────────────────────────────────────────────────────────────────┤
 │                 ce_net_base (共享网络库，C)                         │
 │  TCP 连接管理 / 二进制协议编解码 / 心跳检测 / 连接池                 │
@@ -189,13 +189,13 @@ chaos_router (R2)       C         9100             服务注册/路由查询
                                   9101             集群内部通信
 chaos_game (GAME)       D         7777             核心游戏逻辑
 Lua DBProxy (GAME)      D         9003             数据库代理
-chaos_game (FRIEND)     E         9100 (注册端口)   好友系统微服务
+chaos_game (FRIEND)     E         9100 (注册端口)   好友 Game 进程（加载 friend.lua）
 Lua DBProxy (FRIEND)    E         9013             数据库代理
-chaos_game (PVP)        F         9100 (注册端口)   PVP 微服务
+chaos_game (PVP)        F         9100 (注册端口)   PVP Game 进程（加载 pvp.lua）
 Lua DBProxy (PVP)       F         9023             数据库代理
-chaos_game (PVE)        G         9100 (注册端口)   PVE 微服务
+chaos_game (PVE)        G         9100 (注册端口)   PVE Game 进程（加载 pve.lua）
 Lua DBProxy (PVE)       G         9033             数据库代理
-chaos_game (TRADE)      H         9100 (注册端口)   交易微服务
+chaos_game (TRADE)      H         9100 (注册端口)   交易 Game 进程（加载 trade.lua）
 Lua DBProxy (TRADE)     H         9043             数据库代理
 MongoDB                 I        27017             数据持久化
 ```
@@ -208,7 +208,7 @@ MongoDB                 I        27017             数据持久化
 
 **理由**：
 - **消除代码重复**：Gateway 和 Router 都需要 TCP 连接管理、二进制协议编解码、心跳检测、连接池。抽离为共享库后，两者共享同一套实现，减少 ~2000 行重复代码。
-- **统一协议**：Gateway 和 Router 使用相同的二进制协议格式，客户端 → Gateway → Game 和 Game → Router → 微服务的消息无需协议转换。
+- **统一协议**：Gateway 和 Router 使用相同的二进制协议格式，客户端 → Gateway → Game 和 Game → Router → Game 进程的消息无需协议转换。
 - **统一维护**：网络层的 bug 修复和性能优化只需在一处进行，Gateway 和 Router 同时受益。
 - **Gateway 迁移友好**：Gateway 原本内联的网络逻辑替换为 ce_net_base 调用，Gateway 代码量减少 ~40%，聚焦于协议适配和消息转发（直连 Game）。Gateway 不引入路由功能。
 
@@ -249,14 +249,14 @@ int ce_net_base_unpack(const uint8_t* buf, uint32_t buf_len, uint16_t* msg_type,
 **选择**：一致性哈希（虚拟节点数 150），路由键为 player_id。
 
 **理由**：
-- **会话亲和性**：同一 player_id 始终路由到同一进程，避免跨进程状态查询，简化微服务内部逻辑。
+- **会话亲和性**：同一 player_id 始终路由到同一进程，避免跨进程状态查询，简化 Game 进程内部逻辑。
 - **扩缩容友好**：进程增减时仅影响相邻虚拟节点覆盖的 player_id 范围，数据迁移量最小（约 1/N，N 为进程数）。
 - **负载均衡**：150 个虚拟节点使哈希环分布均匀，各进程负载接近均衡。
 - **O(log N) 查询**：虚拟节点在有序数据结构（如跳表或红黑树）中二分查找，查询效率高。
 
 **替代方案**：
 - ❌ 范围分片（player_id % N）：扩缩容时几乎所有 player_id 都需要重新分配，数据迁移量接近 100%。
-- ❌ 随机路由：无会话亲和性，每次请求可能路由到不同进程，微服务需要无状态设计或分布式缓存。
+- ❌ 随机路由：无会话亲和性，每次请求可能路由到不同进程，Game 进程需要无状态设计或分布式缓存。
 - ❌ 最少连接数路由：需要 Router 维护每个进程的连接数，增加复杂度；且无法保证会话亲和性。
 
 **一致性哈希实现细节**：
@@ -354,26 +354,26 @@ int ce_net_base_unpack(const uint8_t* buf, uint32_t buf_len, uint16_t* msg_type,
   0x0005  sa-east     (南美区)
 ```
 
-### Decision 5: 微服务通过 Router 中转 vs 微服务直连
+### Decision 5: Game 进程通过 Router 中转 vs Game 进程直连
 
-**选择**：所有微服务间（Game↔Game）消息通过 Router 中转，微服务之间不建立直接连接。Gateway 直连 Game，不经过 Router。
+**选择**：所有 Game 进程间（Game↔Game）消息通过 Router 中转，Game 进程之间不建立直接连接。Gateway 直连 Game，不经过 Router。
 
 **理由**：
 - **集中路由管控**：Router 统一管理 Game↔Game 消息路由，便于监控、限流、审计。
-- **简化微服务**：微服务只需维护与 Router 的一条连接，无需管理与其他微服务的连接。
-- **服务发现透明**：微服务只需指定目标 service_type 和路由键，Router 负责查找目标地址。
-- **故障隔离**：目标微服务不可用时，Router 返回错误，不会影响源微服务的连接状态。
+- **简化 Game 进程**：Game 进程只需维护与 Router 的一条连接，调用 `ce_rpc_call()` 即可通信，无需管理与其他 Game 进程的连接。
+- **服务发现透明**：Game 进程只需指定目标 service_type 和路由键，Router 负责查找目标地址。
+- **故障隔离**：目标 Game 进程不可用时，Router 返回错误，不会影响源 Game 进程的连接状态。
 - **客户端路径低延迟**：Gateway→Game 直连，客户端消息不经过 Router，减少一跳延迟。
 
 **替代方案**：
-- ❌ 微服务直连：每个微服务需要维护到所有其他微服务的连接（O(N²) 连接数），服务发现逻辑分散在各微服务中。
+- ❌ Game 进程直连：每个 Game 进程需要维护到所有其他 Game 进程的连接（O(N²) 连接数），服务发现逻辑分散在各 Game 进程中。
 - ❌ 事件总线（Pub/Sub）：异步模式不适合请求-响应场景（如查询玩家在线状态）。
 
 **消息路由流程**：
 ```
-微服务 A → Router → 微服务 B:
+Game 进程 A → Router → Game 进程 B:
 
-1. 微服务 A 构造消息:
+1. Game 进程 A 调用 ce_rpc_call() 构造消息:
    {
      src_service: "FRIEND",
      src_process_id: 2001,
@@ -389,7 +389,7 @@ int ce_net_base_unpack(const uint8_t* buf, uint32_t buf_len, uint16_t* msg_type,
    c. 查找 process_id=1001 的地址: 192.168.1.10:7777
    d. 转发消息到 192.168.1.10:7777
 
-3. 微服务 B (GAME/1001) 处理请求，构造响应:
+3. Game 进程 B (GAME/1001) 处理请求，构造响应:
    {
      dst_service: "FRIEND",
      dst_process_id: 2001,
@@ -404,26 +404,26 @@ int ce_net_base_unpack(const uint8_t* buf, uint32_t buf_len, uint16_t* msg_type,
 
 ### Decision 6: 数据隔离 — 独立 DBProxy vs 共享 DBProxy
 
-**选择**：每个微服务连接独立的 DBProxy 实例（或共享 DBProxy 但使用独立数据库）。
+**选择**：每个 Game 进程连接独立的 DBProxy 实例（或共享 DBProxy 但使用独立数据库）。
 
 **理由**：
-- **数据边界清晰**：每个微服务拥有独立的数据库命名空间（`chaos_{game_id}_{service_type}`），数据模型独立演进。
-- **故障隔离**：一个微服务的数据库压力不影响其他微服务。
-- **独立扩展**：每个微服务的 DBProxy 可独立扩容（增加连接数、读写分离）。
-- **安全边界**：微服务 A 无法直接访问微服务 B 的数据库，必须通过 Router 发送消息。
+- **数据边界清晰**：每个 Game 进程拥有独立的数据库命名空间（`chaos_{game_id}_{service_type}`），数据模型独立演进。
+- **故障隔离**：一个 Game 进程的数据库压力不影响其他 Game 进程。
+- **独立扩展**：每个 Game 进程的 DBProxy 可独立扩容（增加连接数、读写分离）。
+- **安全边界**：Game 进程 A 无法直接访问 Game 进程 B 的数据库，必须通过 Router 发送消息。
 
 **替代方案**：
-- ❌ 共享数据库：微服务间数据耦合，一方的 schema 变更影响其他方；无法独立扩容。
-- ❌ 每个微服务直连 MongoDB：失去 DBProxy 的连接池复用、主备切换、协议抽象等优势。
+- ❌ 共享数据库：Game 进程间数据耦合，一方的 schema 变更影响其他方；无法独立扩容。
+- ❌ 每个 Game 进程直连 MongoDB：失去 DBProxy 的连接池复用、主备切换、协议抽象等优势。
 
 ## Data Flow
 
-### 1. 客户端请求 → 微服务响应（完整链路）
+### 1. 客户端请求 → Game 进程响应（完整链路）
 
 ```
 时间线 →
 
-客户端          Gateway           Game(核心)          Router            微服务(FRIEND)      DBProxy(FRIEND)
+客户端          Gateway           Game(核心)          Router            Game进程(FRIEND)    DBProxy(FRIEND)
 ──────          ───────           ─────────           ──────            ──────────────      ───────────────
    │               │                  │                  │                    │                   │
    │ ──好友请求──→  │                  │                  │                    │                   │
@@ -438,9 +438,9 @@ int ce_net_base_unpack(const uint8_t* buf, uint32_t buf_len, uint16_t* msg_type,
    │               │ ──转发消息────→  │                  │                    │                   │
    │               │                  │                  │                    │                   │
    │               │                  │ Game 需要调用     │                    │                   │
-   │               │                  │ 好友服务处理请求   │                    │                   │
+   │               │                  │ 好友进程处理请求   │                    │                   │
    │               │                  │                  │                    │                   │
-   │               │                  │ ──Game→Router──→ │                    │                   │
+   │               │                  │ ─ce_rpc_call()─→ │                    │                   │
    │               │                  │ {player_id:42,   │                    │                   │
    │               │                  │  dst:FRIEND,     │                    │                   │
    │               │                  │  body:{...}}     │                    │                   │
@@ -533,7 +533,7 @@ Gateway (asia-east)                      │
 ```
 时间线 →
 
-微服务(FRIEND/2001)    Router R1          Router R2          Router R3
+Game进程(FRIEND/2001)   Router R1          Router R2          Router R3
 ─────────────────      ────────           ────────           ────────
    │                      │                  │                  │
    │ ──REGISTER────→     │                  │                  │
@@ -566,10 +566,10 @@ Gateway (asia-east)                      │
 
 - **风险**：所有服务间消息经过 Router 中转，Router 可能成为性能瓶颈。
 - **缓解**：
-  - Router 集群多实例部署，微服务可连接不同 Router 实例分散负载。
+  - Router 集群多实例部署，Game 进程可连接不同 Router 实例分散负载。
   - Router 内部使用 Lua 协程处理并发，单实例可支撑数万 QPS。
   - 路由查询在内存中完成（O(log N) 哈希环查找），延迟极低（<100μs）。
-  - 未来可引入消息直连优化：高频通信的微服务对可在 Router 协调下建立直连。
+  - 未来可引入消息直连优化：高频通信的 Game 进程对可在 Router 协调下建立直连。
 - **影响**：中。单 Router 实例可支撑当前规模，多实例集群可水平扩展。
 
 ### Risk 2: 路由表广播延迟导致短暂不一致
@@ -578,7 +578,7 @@ Gateway (asia-east)                      │
 - **缓解**：
   - 广播延迟通常在 100ms 以内，不一致窗口极短。
   - 发送方 Router 在转发消息时若连接失败，立即更新本地路由表并重试路由。
-  - 微服务进程进入 DRAINING 状态后再注销，确保进行中请求完成。
+  - Game 进程进入 DRAINING 状态后再注销，确保进行中请求完成。
 - **影响**：低。短暂不一致仅影响新请求，且发送方 Router 有重试机制。
 
 ### Risk 3: 跨区域网络延迟
@@ -594,16 +594,16 @@ Gateway (asia-east)                      │
 
 - **风险**：进程扩缩容时，player_id 范围重新分配，已在原进程内存中的玩家数据需要迁移。
 - **缓解**：
-  - 数据迁移由微服务自身处理（从 DBProxy 加载），Router 不参与。
+  - 数据迁移由 Game 进程自身处理（从 DBProxy 加载），Router 不参与。
   - 缩容时使用 DRAINING 状态，给原进程时间完成数据持久化。
   - 玩家重连时自动从 DBProxy 加载数据到新进程。
-- **影响**：中。需要微服务实现数据加载逻辑，但架构上已支持（DBProxy 持久化）。
+- **影响**：中。需要 Game 进程实现数据加载逻辑，但架构上已支持（DBProxy 持久化）。
 
 ### Trade-off: 集中路由 vs 直连
 
 - **选择**：Game↔Game 通过 Router 集中路由，Gateway→Game 直连。
-- **代价**：Game↔Game 消息增加一跳网络延迟（~0.1-1ms 内网），Router 成为微服务间通信的关键路径。
-- **收益**：统一服务发现、集中管控、简化微服务、连接数从 O(N²) 降为 O(N)。客户端路径（Gateway→Game）保持低延迟。
+- **代价**：Game↔Game 消息增加一跳网络延迟（~0.1-1ms 内网），Router 成为 Game 进程间通信的关键路径。
+- **收益**：统一服务发现、集中管控、简化 Game 进程、连接数从 O(N²) 降为 O(N)。客户端路径（Gateway→Game）保持低延迟。
 - **缓解**：Router 集群多实例 + 内存路由表 + 协程并发。
 
 ### Trade-off: 广播同步 vs 强一致性

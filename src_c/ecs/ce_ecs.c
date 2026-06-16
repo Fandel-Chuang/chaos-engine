@@ -500,6 +500,12 @@ void ce_ecs_update_systems(float delta_time) {
     }
 }
 
+/* ---- 公共更新 API ---- */
+
+void ce_ecs_update(float delta_time) {
+    ce_ecs_update_systems(delta_time);
+}
+
 /* ---- 查询 ---- */
 
 struct CeQuery {

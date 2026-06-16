@@ -89,6 +89,11 @@ void ce_query_destroy(CeQuery* query);
 /** 执行查询迭代 */
 uint32_t ce_query_execute(CeQuery* query, CeEntity* out_entities, uint32_t max_count);
 
+/* ---- 更新 ---- */
+
+/** 更新所有 ECS 系统（每帧调用，由引擎主循环驱动） */
+void ce_ecs_update(float delta_time);
+
 /* ---- 统计 ---- */
 
 /** 获取当前存活实体数 */

@@ -62,3 +62,161 @@ target_include_directories(test_cell PRIVATE
 target_link_libraries(test_cell PRIVATE engine_core engine_server)
 set_target_properties(test_cell PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME cell COMMAND test_cell)
+
+# ---- test_ebpf (Phase 7.4: eBPF 单元测试) ----
+add_executable(test_ebpf unit/test_ebpf.c)
+target_include_directories(test_ebpf PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_ebpf PRIVATE engine_core)
+set_target_properties(test_ebpf PROPERTIES LINKER_LANGUAGE C)
+# Copy BPF object file to build output directory so ce_ebpf_init can find it
+add_custom_command(TARGET test_ebpf POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/src_c/network/ce_ebpf_kern.o
+        $<TARGET_FILE_DIR:test_ebpf>/ce_ebpf_kern.o
+    COMMENT "Copying ce_ebpf_kern.o to test output dir"
+)
+add_test(NAME ebpf COMMAND test_ebpf WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ---- test_ebpf_errors (Phase 7.5: eBPF 错误处理测试) ----
+add_executable(test_ebpf_errors unit/test_ebpf_errors.c)
+target_include_directories(test_ebpf_errors PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_ebpf_errors PRIVATE engine_core)
+set_target_properties(test_ebpf_errors PROPERTIES LINKER_LANGUAGE C)
+add_custom_command(TARGET test_ebpf_errors POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/src_c/network/ce_ebpf_kern.o
+        $<TARGET_FILE_DIR:test_ebpf_errors>/ce_ebpf_kern.o
+)
+add_test(NAME ebpf_errors COMMAND test_ebpf_errors WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ---- test_ebpf_integration (Phase 7.6: io_uring + eBPF 集成测试) ----
+add_executable(test_ebpf_integration unit/test_ebpf_integration.c)
+target_include_directories(test_ebpf_integration PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_ebpf_integration PRIVATE engine_core)
+# Need direct liburing link for raw io_uring in child process
+if(LIBURING_FOUND)
+    target_include_directories(test_ebpf_integration PRIVATE ${LIBURING_INCLUDE_DIRS})
+    target_link_libraries(test_ebpf_integration PRIVATE ${LIBURING_LIBRARIES})
+endif()
+set_target_properties(test_ebpf_integration PROPERTIES LINKER_LANGUAGE C)
+add_custom_command(TARGET test_ebpf_integration POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/src_c/network/ce_ebpf_kern.o
+        $<TARGET_FILE_DIR:test_ebpf_integration>/ce_ebpf_kern.o
+)
+add_test(NAME ebpf_integration COMMAND test_ebpf_integration WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ---- test_ebpf_stress (Phase 7.7: 1000 并发 + eBPF 压力测试) ----
+add_executable(test_ebpf_stress unit/test_ebpf_stress.c)
+target_include_directories(test_ebpf_stress PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_ebpf_stress PRIVATE engine_core)
+# Need direct liburing link for raw io_uring in child process
+if(LIBURING_FOUND)
+    target_include_directories(test_ebpf_stress PRIVATE ${LIBURING_INCLUDE_DIRS})
+    target_link_libraries(test_ebpf_stress PRIVATE ${LIBURING_LIBRARIES})
+endif()
+set_target_properties(test_ebpf_stress PROPERTIES LINKER_LANGUAGE C)
+add_custom_command(TARGET test_ebpf_stress POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/src_c/network/ce_ebpf_kern.o
+        $<TARGET_FILE_DIR:test_ebpf_stress>/ce_ebpf_kern.o
+)
+add_test(NAME ebpf_stress COMMAND test_ebpf_stress WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ============================================================
+# Phase 7.1: io_uring 异步 I/O 基本功能测试
+# ============================================================
+add_executable(test_async_io unit/test_async_io.c)
+target_include_directories(test_async_io PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_async_io PRIVATE engine_core)
+set_target_properties(test_async_io PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME async_io COMMAND test_async_io WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ============================================================
+# Phase 7.2: io_uring 异步 I/O 错误处理测试
+# ============================================================
+add_executable(test_async_io_errors unit/test_async_io_errors.c)
+target_include_directories(test_async_io_errors PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_async_io_errors PRIVATE engine_core)
+set_target_properties(test_async_io_errors PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME async_io_errors COMMAND test_async_io_errors WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ============================================================
+# Phase 7.3: POSIX fallback (select 模式) 单元测试
+# 编译时不定义 CHAOS_HAS_IO_URING，强制使用 ce_async_posix.c
+# ============================================================
+file(GLOB_RECURSE ENGINE_CORE_POSIX_SOURCES
+    "${CMAKE_SOURCE_DIR}/src_c/core/*.c"
+    "${CMAKE_SOURCE_DIR}/src_c/ecs/*.c"
+    "${CMAKE_SOURCE_DIR}/src_c/log/*.c"
+    "${CMAKE_SOURCE_DIR}/src_c/plugin/*.c"
+    "${CMAKE_SOURCE_DIR}/src_c/render/*.c"
+    "${CMAKE_SOURCE_DIR}/src_c/network/ce_network.c"
+    "${CMAKE_SOURCE_DIR}/src_c/network/ce_async_posix.c"
+    "${CMAKE_SOURCE_DIR}/src_c/network/ce_kcp.c"
+    "${CMAKE_SOURCE_DIR}/src_c/network/ce_kcp_lua.c"
+    "${CMAKE_SOURCE_DIR}/src_c/network/ikcp.c"
+    "${CMAKE_SOURCE_DIR}/src_c/script/*.c"
+    "${CMAKE_SOURCE_DIR}/src_c/runtime/ce_engine.c"
+)
+add_library(engine_core_posix_test STATIC ${ENGINE_CORE_POSIX_SOURCES})
+set_source_files_properties(${ENGINE_CORE_POSIX_SOURCES} PROPERTIES LANGUAGE C)
+target_include_directories(engine_core_posix_test
+    PUBLIC  ${CMAKE_SOURCE_DIR}/src_c/public_api
+    PRIVATE ${CMAKE_SOURCE_DIR}/src_c
+            ${CMAKE_SOURCE_DIR}/src_c/core
+            ${CMAKE_SOURCE_DIR}/src_c/ecs
+            ${CMAKE_SOURCE_DIR}/src_c/log
+            ${CMAKE_SOURCE_DIR}/src_c/plugin
+            ${CMAKE_SOURCE_DIR}/src_c/render
+            ${CMAKE_SOURCE_DIR}/src_c/network
+            ${CMAKE_SOURCE_DIR}/src_c/script
+            ${CMAKE_SOURCE_DIR}/src_c/runtime
+            ${CMAKE_SOURCE_DIR}/third_party/vulkan/include
+            ${CMAKE_SOURCE_DIR}/third_party/x11/include
+            ${CMAKE_SOURCE_DIR}/third_party/lua/include
+)
+target_compile_options(engine_core_posix_test PRIVATE
+    $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration>
+    $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic>
+)
+target_link_libraries(engine_core_posix_test PRIVATE m pthread dl
+    ${CMAKE_SOURCE_DIR}/third_party/lua/lib/liblua5.4.so)
+# eBPF support (same as engine_core)
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(LIBBPF libbpf)
+    if(LIBBPF_FOUND)
+        target_compile_definitions(engine_core_posix_test PRIVATE CHAOS_HAS_EBPF)
+        target_include_directories(engine_core_posix_test PRIVATE ${LIBBPF_INCLUDE_DIRS})
+        target_link_libraries(engine_core_posix_test PRIVATE ${LIBBPF_LIBRARIES})
+    endif()
+endif()
+set_target_properties(engine_core_posix_test PROPERTIES LINKER_LANGUAGE C)
+
+add_executable(test_async_io_posix unit/test_async_io_posix.c)
+target_include_directories(test_async_io_posix PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_async_io_posix PRIVATE engine_core_posix_test)
+set_target_properties(test_async_io_posix PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME async_io_posix COMMAND test_async_io_posix WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})

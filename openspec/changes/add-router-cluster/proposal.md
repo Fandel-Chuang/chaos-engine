@@ -1,6 +1,6 @@
 # add-router-cluster
 
-Router 集群：服务发现 + 服务器间消息路由 + 微服务拆分
+Router 集群：服务发现 + 服务器间消息路由 + Game 进程按功能模块拆分
 
 > 来源: add-router-cluster | 状态: 规划中 | 变更类型: ADDED
 
@@ -11,17 +11,17 @@ Router 集群：服务发现 + 服务器间消息路由 + 微服务拆分
 ChaosEngine v0.3 已具备 Gateway 网络接入层和 DBProxy 数据持久化层，但服务端内部通信和微服务拆分仍存在以下核心问题：
 
 1. **无服务发现机制**：Gateway 通过静态配置转发消息到 Game 进程，无法动态感知 Game 进程的上线/下线/扩缩容。新增 Game 进程需要手动修改 Gateway 配置并重启，运维成本高。
-2. **无服务器间消息路由**：不同 Game 进程之间（如好友服务需要查询另一个玩家的在线状态）无法直接通信。当前所有 Game 逻辑耦合在单一进程中，无法按功能模块拆分。
-3. **微服务拆分缺乏基础设施**：随着游戏功能增长（好友、PVP、PVE、交易、公会等），单一 Game 进程成为性能瓶颈和单点故障。需要将不同功能模块拆分为独立微服务进程，但缺乏统一的服务间通信层。
+2. **无服务器间消息路由**：不同 Game 进程之间（如好友功能需要查询另一个玩家的在线状态）无法直接通信。当前所有 Game 逻辑耦合在单一进程中，无法按功能模块拆分。
+3. **Game 进程按功能模块拆分缺乏基础设施**：随着游戏功能增长（好友、PVP、PVE、交易、公会等），单一 Game 进程成为性能瓶颈和单点故障。需要将不同功能模块拆分为独立的 Game 进程实例（加载不同 Lua 业务脚本），但缺乏统一的服务间通信层。
 4. **全球同服多区部署是核心架构需求**：ChaosEngine 定位为全球同服游戏引擎，必须原生支持多区域部署（亚洲区/欧洲区/美洲区等）。每个大区独立部署完整集群，大区之间通过 Router 跨区路由进行交互（如跨服 PVP、全球聊天、跨区交易）。跨区域消息转发不是延后功能，而是 Phase 1 就必须具备的核心能力。
 5. **Gateway 与 Router 网络逻辑重复**：Gateway 和 Router 都需要 TCP 连接管理、心跳检测、二进制协议编解码等基础网络能力（但 Gateway 不需要路由功能）。若不抽离共享库，将导致代码重复和维护负担。
 
 引入 Router 集群后，可实现：
-- Router 作为服务注册中心，Game 进程启动时自动注册，微服务间通过 Router 发现彼此
+- Router 作为服务注册中心，Game 进程启动时自动注册，不同 Game 进程间通过 Router 发现彼此
 - **Gateway ↔ Game 直连**：客户端消息经 Gateway 直接转发到 Game 进程，不经过 Router。Gateway 通过静态配置或简单负载均衡直连 Game，保持低延迟客户端通信路径
-- **Game ↔ Game 消息路由**：不同 Game/微服务进程之间的消息（如好友服务查询玩家在线状态）通过 Router 中转，支持按 player_id 一致性哈希路由到目标微服务进程
-- 微服务按功能模块拆分（好友/PVP/PVE/交易等独立 Game 进程），通过 Router 通信
-- 全球同服：全球分多个大区（亚洲区/欧洲区/美洲区），每个大区独立部署完整集群（Gateway + Router 集群 + 微服务 + DBProxy + MongoDB）。大区之间通过 Router 跨区 TCP 长连接互联，组成全球 Router 网格，支持跨区消息路由（跨服 PVP、全球聊天、跨区交易等）。跨大区消息也是 Game↔Game 通过 Router 转发
+- **Game ↔ Game 消息路由**：不同 Game 进程之间的消息（如好友功能查询玩家在线状态）通过 Router 中转，支持按 player_id 一致性哈希路由到目标 Game 进程
+- Game 进程按功能模块拆分（好友/PVP/PVE/交易等），各自加载不同的 Lua 业务脚本（friend.lua / pvp.lua / trade.lua），通过 Router 通信
+- 全球同服：全球分多个大区（亚洲区/欧洲区/美洲区），每个大区独立部署完整集群（Gateway + Router 集群 + Game 进程 + DBProxy + MongoDB）。大区之间通过 Router 跨区 TCP 长连接互联，组成全球 Router 网格，支持跨区消息路由（跨服 PVP、全球聊天、跨区交易等）。跨大区消息也是 Game↔Game 通过 Router 转发
 - 共享网络库 `ce_net_base`（C）抽离 Gateway 和 Router 的公共网络逻辑，避免代码重复
 
 ## What Changes
@@ -32,7 +32,7 @@ ChaosEngine v0.3 已具备 Gateway 网络接入层和 DBProxy 数据持久化层
 
 2. **Router 进程（Lua）**：`src_lua/router/` — 独立 Lua 进程，基于 Lua 5.4 + LuaSocket。实现服务注册与发现（Game 进程注册）、Game↔Game 消息路由（一致性哈希）、Router 集群内部通信（广播路由表）、跨区域 Game↔Game 转发。**Router 不参与 Gateway→Game 的客户端消息路径**，Gateway 直连 Game。进程由 `chaos_router` 可执行文件启动。
 
-3. **微服务拆分规范**：定义微服务类型枚举（好友/PVP/PVE/交易/公会等），每个微服务为独立 Game 进程，通过 Router 注册和通信。每个微服务连接独立的 DBProxy 实例实现数据隔离。
+3. **Game 进程按功能模块拆分**：定义功能模块类型枚举（好友/PVP/PVE/交易/公会等），每个功能模块为独立的 Game 进程实例（同一个 `chaos_game` 二进制），通过加载不同的 Lua 业务脚本（如 `friend.lua`、`pvp.lua`、`trade.lua`）实现不同功能。所有 Game 进程通过 Router 注册和通信（调用 `ce_rpc_call()`），Router 提供消息路由能力。每个 Game 进程连接独立的 DBProxy 实例实现数据隔离。
 
 ### 架构决策
 
@@ -43,7 +43,7 @@ ChaosEngine v0.3 已具备 Gateway 网络接入层和 DBProxy 数据持久化层
 | 服务发现 | Router 集中注册 + 广播同步 | 无需外部服务（etcd/Consul），Router 集群内广播路由表，降低部署复杂度 |
 | 消息路由算法 | 一致性哈希（player_id → 虚拟节点 → 目标进程） | 玩家与微服务进程的亲和性绑定，进程扩缩容时最小化数据迁移 |
 | 跨区域通信 | Router 间 TCP 长连接 + 消息转发 | 简单可靠，无需额外的跨区域消息队列；每个区域的 Router 与其他区域 Router 建立全互联 |
-| 微服务通信 | 通过 Router 中转（Game↔Game） | 微服务之间不直连，所有 Game↔Game 消息经 Router 路由，集中管控和监控。Gateway→Game 直连，不经过 Router |
+| 微服务通信 | 通过 Router 中转（Game↔Game） | 不同 Game 进程之间不直连，所有 Game↔Game 消息经 Router 路由，集中管控和监控。Gateway→Game 直连，不经过 Router |
 | 数据隔离 | 每个微服务独立 DBProxy 连接 | 避免微服务间的数据库耦合，每个微服务拥有独立的数据库连接和集合命名空间 |
 | 编译策略 | CMake option + `#ifdef` 条件编译 | `CHAOS_HAS_ROUTER` 控制 ce_net_base 编译，非 Server 构建零开销 |
 
@@ -61,7 +61,7 @@ ChaosEngine v0.3 已具备 Gateway 网络接入层和 DBProxy 数据持久化层
 | `src_c/runtime/ce_gateway_main.c` | 修改 | 链接 ce_net_base 替代内联网络逻辑 |
 | `src_c/network/CMakeLists.txt` | 修改 | 添加 ce_net_base 源文件和 `CHAOS_HAS_ROUTER` 条件编译 |
 | `src_c/CMakeLists.txt` | 修改 | 添加 `CHAOS_HAS_ROUTER` 选项 |
-| `src_lua/shared/` | **新增** | 微服务共享 Lua 库（service_registry.lua, msg_router.lua） |
+| `src_lua/services/` | **新增** | Game 进程按功能模块拆分的 Lua 业务脚本（friend.lua, pvp.lua, trade.lua 等） |
 
 ### 不受影响的模块
 
@@ -77,14 +77,14 @@ ChaosEngine v0.3 已具备 Gateway 网络接入层和 DBProxy 数据持久化层
 
 **Phase 2：Router 基础** — Router 进程启动、服务注册与发现（Game 进程启动时向 Router 注册）、Game↔Game 消息路由（player_id → 一致性哈希 → 目标进程）、Router 集群内广播路由表。Gateway 保持直连 Game，不经过 Router。
 
-**Phase 3：微服务拆分** — 定义微服务类型枚举，以好友服务为示例拆分为独立 Game 进程。好友服务通过 Router 注册，客户端消息经 Gateway 直连 Game（核心逻辑），Game↔好友服务 间通信通过 Router 中转。验证服务间通信正确性。
+**Phase 3：Game 进程按功能模块拆分** — 定义功能模块类型枚举，以好友功能为示例拆分为独立 Game 进程实例。好友 Game 进程加载 `friend.lua` 业务脚本，通过 Router 注册，客户端消息经 Gateway 直连 Game（核心逻辑），Game↔好友 Game 进程间通信通过 Router 中转（调用 `ce_rpc_call()`）。验证进程间通信正确性。
 
 **Phase 4：跨区域路由集成 + 全链路测试** — 基于 Phase 1 的跨区路由基础，完成全球多区域部署的完整集成。多区域部署（如 us-west、ap-southeast、eu-west），每个大区独立部署完整集群。玩家跨区域交互（如跨服 PVP、全球聊天、跨区交易）的端到端验证。全链路集成测试（Gateway 直连 Game + Game↔Game 经 Router + 微服务 → DBProxy），异常场景测试（Router 故障、微服务扩缩容、跨区域网络分区），性能基准测试。
 
 **延后到后续版本**：
 - Router 多活负载均衡（当前为单 Router per 区域）
-- 微服务动态扩缩容的自动再均衡
+- Game 进程动态扩缩容的自动再均衡
 - 消息优先级队列和流量控制
 - 跨区域消息压缩和加密
 - 基于 Raft 的 Router 集群一致性（当前为广播同步）
-- 微服务网格（Service Mesh）化
+- 服务网格（Service Mesh）化
