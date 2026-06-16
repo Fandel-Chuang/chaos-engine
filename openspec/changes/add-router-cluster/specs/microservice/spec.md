@@ -4,7 +4,7 @@
 
 ## 概述
 
-定义 ChaosEngine 微服务拆分规范。将单体 Game 进程按功能模块拆分为独立的微服务进程（好友/PVP/PVE/交易/公会等），每个微服务为独立的 Game 进程，通过 Router 进行服务注册和服务间通信。每个微服务连接独立的 DBProxy 实例实现数据隔离，支持独立扩缩容。**微服务需感知区域归属**：每个微服务进程明确知道自己所属的大区（如 asia-east），跨区交互通过 Router 全球网格完成。
+定义 ChaosEngine 微服务拆分规范。将单体 Game 进程按功能模块拆分为独立的微服务进程（好友/PVP/PVE/交易/公会等），每个微服务为独立的 Game 进程，通过 Router 进行服务注册和 Game↔Game 服务间通信。**Gateway 直连 Game（核心逻辑进程），不经过 Router**；微服务间（如 Game↔好友服务、PVP↔交易服务）的通信通过 Router 中转。每个微服务连接独立的 DBProxy 实例实现数据隔离，支持独立扩缩容。**微服务需感知区域归属**：每个微服务进程明确知道自己所属的大区（如 asia-east），跨区交互通过 Router 全球网格完成。
 
 ---
 
@@ -86,9 +86,9 @@
 
 ---
 
-### Requirement: 服务间通信
+### Requirement: 服务间通信（Game↔Game）
 
-微服务之间 SHALL 通过 Router 中转进行通信，不建立直接的 TCP 连接。
+微服务之间 SHALL 通过 Router 中转进行通信，不建立直接的 TCP 连接。**Gateway 直连 Game（核心逻辑进程），不经过 Router**。
 
 服务间通信 MUST 满足以下要求：
 - 微服务 A 向微服务 B 发送消息时，MUST 将消息发送到 Router，由 Router 转发

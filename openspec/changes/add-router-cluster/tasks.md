@@ -1,6 +1,6 @@
 # Tasks: Router 集群 — 服务发现 + 消息路由 + 微服务拆分
 
-> 按依赖顺序排列，Phase 1-5。全部待开始。
+> 按依赖顺序排列，Phase 1-4。全部待开始。
 
 ---
 
@@ -18,64 +18,54 @@
 - [ ] 1.10 定义跨区消息格式：在 `ce_net_base.h` 中定义跨区消息头结构（length + type + source_region + target_region + payload），定义大区标识枚举（asia-east=0x0001, eu-west=0x0002, us-west=0x0003, us-east=0x0004, sa-east=0x0005）
 - [ ] 1.11 实现跨区 TCP 长连接框架：`ce_net_base_cross_region_connect(region_id, router_list)` 建立到目标大区 Router 的 TCP 长连接，`ce_net_base_cross_region_send(conn, source_region, target_region, msg)` 发送跨区消息，`ce_net_base_cross_region_recv(conn, ...)` 接收跨区消息
 - [ ] 1.12 实现全球 Router 网格连接管理：维护跨区连接表 `{target_region → CeNetBaseConn}`，支持全互联拓扑自动建立连接，新增大区时动态添加连接
+- [ ] 1.13 Gateway 网络层迁移：替换 Gateway 内联的 socket 操作、消息编解码、心跳检测为 `ce_net_base` 调用（仅替换网络底层实现，Gateway 保持直连 Game，不引入路由功能）
+- [ ] 1.14 更新 Gateway 的 CMakeLists.txt：链接 `engine_net_base` 替代内联网络代码
+- [ ] 1.15 回归测试：验证 Gateway 迁移后 TCP/KCP/WebSocket 接入、连接管理、消息转发（直连 Game）功能不受影响
 
 ---
 
-## Phase 2: Gateway 重构（链接 ce_net_base）
+## Phase 2: Router 进程（Lua）
 
-- [ ] 2.1 重构 Gateway 的 TCP 连接管理：替换内联的 socket 操作为 `ce_net_base_connect/recv/send/disconnect` 调用
-- [ ] 2.2 重构 Gateway 的消息编解码：替换内联的协议解析为 `ce_net_base_pack/unpack` 调用
-- [ ] 2.3 重构 Gateway 的心跳检测：替换内联的心跳逻辑为 `ce_net_base_heartbeat_start/is_alive` 调用
-- [ ] 2.4 Gateway 路由查询改为从 Router 动态获取：Gateway 启动时连接 Router，定期（30s TTL）查询路由表，替代静态配置文件路由
-- [ ] 2.5 更新 Gateway 的 CMakeLists.txt：链接 `engine_net_base` 替代内联网络代码
-- [ ] 2.6 回归测试：验证 Gateway 重构后 TCP/KCP/WebSocket 接入、连接管理、消息路由功能不受影响
-
----
-
-## Phase 3: Router 进程（Lua）
-
-- [ ] 3.1 创建 `src_lua/router/` 目录，创建 `init.lua` 入口：启动 TCP 服务器监听 `:9100`（服务注册/路由查询端口）和 `:9101`（集群内部通信端口），加载各子模块，进入事件循环
-- [ ] 3.2 创建 `config.lua`：定义 Router 配置（服务端口 9100、集群端口 9101、集群成员列表、心跳间隔 1s、超时阈值 3s、虚拟节点数 150、区域 ID），支持命令行参数和配置文件覆盖
-- [ ] 3.3 创建 `registry.lua`：实现服务注册表 — 数据结构（按 service_type 索引的进程列表）、`register(service_type, process_id, address)`、`deregister(process_id)`、`query(service_type)`、`lookup(process_id)`、`list_all()`、`update_heartbeat(process_id)`
-- [ ] 3.4 创建 `hash_ring.lua`：实现一致性哈希环 — 虚拟节点生成（150 per 进程）、`add_node(process_id, address)`、`remove_node(process_id)`、`get_node(key)` 二分查找路由、`rebuild()` 全量重建
-- [ ] 3.5 创建 `router.lua`：实现消息路由逻辑 — 解析路由请求（直接路由 vs 哈希路由）、调用 `hash_ring.get_node()` 或 `registry.lookup()` 获取目标地址、转发消息到目标进程、处理响应回传、路由失败处理（SERVICE_UNAVAILABLE / DESTINATION_UNREACHABLE）
-- [ ] 3.6 创建 `health.lua`：实现健康检查 — 每 1s 向所有注册进程发送 PING、等待 PONG 响应、连续 3 次超时判定故障、故障时调用 `registry.deregister()` + `hash_ring.remove_node()` + 广播 `HEALTH_CHANGE`、进程恢复时重新加入
-- [ ] 3.7 创建 `cluster.lua`：实现 Router 集群内部通信 — 集群成员管理（加入/离开）、广播同步（REGISTER_NOTIFY / DEREGISTER_NOTIFY / HEALTH_CHANGE）、全量同步（SYNC_REQUEST / SYNC_RESPONSE，新 Router 加入时）、序列号机制（防重复）、网络分区恢复合并
-- [ ] 3.8 创建 `cross_region.lua`：实现跨大区路由 — 全球区域路由表管理（`{region_id → [router_addresses]}`）、跨区 TCP 长连接管理（基于 Phase 1 的 ce_net_base 跨区连接框架，全互联拓扑组成全球 Router 网格）、跨区消息转发（识别目标大区 → 选择目标 Router → 转发，消息携带 source_region + target_region）、连接断开时本地队列暂存、新增大区时动态加入全球网格
-- [ ] 3.9 创建 `protocol.lua`：实现 Router 内部协议编解码（复用 ce_net_base 的二进制协议格式），定义 Router 消息类型（REGISTER/DEREGISTER/QUERY/ROUTE/PING/PONG/REGISTER_NOTIFY/DEREGISTER_NOTIFY/HEALTH_CHANGE/SYNC_REQUEST/SYNC_RESPONSE/REGION_UPDATE/CROSS_REGION_FORWARD）
-- [ ] 3.10 创建 `src_c/runtime/ce_router_main.c`：Router 进程入口 — 初始化 Lua VM，加载 `init.lua`，注册 ce_net_base C 函数到 Lua，进入主循环
-- [ ] 3.11 更新 CMakeLists.txt：添加 `CHAOS_HAS_ROUTER` option，添加 `ce_router_main` 可执行文件目标，链接 `engine_net_base` 和 Lua
+- [ ] 2.1 创建 `src_lua/router/` 目录，创建 `init.lua` 入口：启动 TCP 服务器监听 `:9100`（服务注册/路由查询端口）和 `:9101`（集群内部通信端口），加载各子模块，进入事件循环
+- [ ] 2.2 创建 `config.lua`：定义 Router 配置（服务端口 9100、集群端口 9101、集群成员列表、心跳间隔 1s、超时阈值 3s、虚拟节点数 150、区域 ID），支持命令行参数和配置文件覆盖
+- [ ] 2.3 创建 `registry.lua`：实现服务注册表 — 数据结构（按 service_type 索引的进程列表）、`register(service_type, process_id, address)`、`deregister(process_id)`、`query(service_type)`、`lookup(process_id)`、`list_all()`、`update_heartbeat(process_id)`
+- [ ] 2.4 创建 `hash_ring.lua`：实现一致性哈希环 — 虚拟节点生成（150 per 进程）、`add_node(process_id, address)`、`remove_node(process_id)`、`get_node(key)` 二分查找路由、`rebuild()` 全量重建
+- [ ] 2.5 创建 `router.lua`：实现 Game↔Game 消息路由逻辑 — 解析路由请求（直接路由 vs 哈希路由）、调用 `hash_ring.get_node()` 或 `registry.lookup()` 获取目标地址、转发消息到目标进程、处理响应回传、路由失败处理（SERVICE_UNAVAILABLE / DESTINATION_UNREACHABLE）。Router 不处理 Gateway→Game 的客户端消息
+- [ ] 2.6 创建 `health.lua`：实现健康检查 — 每 1s 向所有注册进程发送 PING、等待 PONG 响应、连续 3 次超时判定故障、故障时调用 `registry.deregister()` + `hash_ring.remove_node()` + 广播 `HEALTH_CHANGE`、进程恢复时重新加入
+- [ ] 2.7 创建 `cluster.lua`：实现 Router 集群内部通信 — 集群成员管理（加入/离开）、广播同步（REGISTER_NOTIFY / DEREGISTER_NOTIFY / HEALTH_CHANGE）、全量同步（SYNC_REQUEST / SYNC_RESPONSE，新 Router 加入时）、序列号机制（防重复）、网络分区恢复合并
+- [ ] 2.8 创建 `cross_region.lua`：实现跨大区路由 — 全球区域路由表管理（`{region_id → [router_addresses]}`）、跨区 TCP 长连接管理（基于 Phase 1 的 ce_net_base 跨区连接框架，全互联拓扑组成全球 Router 网格）、跨区消息转发（识别目标大区 → 选择目标 Router → 转发，消息携带 source_region + target_region）、连接断开时本地队列暂存、新增大区时动态加入全球网格
+- [ ] 2.9 创建 `protocol.lua`：实现 Router 内部协议编解码（复用 ce_net_base 的二进制协议格式），定义 Router 消息类型（REGISTER/DEREGISTER/QUERY/ROUTE/PING/PONG/REGISTER_NOTIFY/DEREGISTER_NOTIFY/HEALTH_CHANGE/SYNC_REQUEST/SYNC_RESPONSE/REGION_UPDATE/CROSS_REGION_FORWARD）
+- [ ] 2.10 创建 `src_c/runtime/ce_router_main.c`：Router 进程入口 — 初始化 Lua VM，加载 `init.lua`，注册 ce_net_base C 函数到 Lua，进入主循环
+- [ ] 2.11 更新 CMakeLists.txt：添加 `CHAOS_HAS_ROUTER` option，添加 `ce_router_main` 可执行文件目标，链接 `engine_net_base` 和 Lua
 
 ---
 
-## Phase 4: 微服务拆分（好友服务示例）
+## Phase 3: 微服务拆分（好友服务示例）
 
-- [ ] 4.1 创建 `src_lua/shared/` 目录，创建 `service_registry.lua`：封装微服务注册/注销/心跳逻辑 — `register(service_type, process_id, address)` 自动完成 TCP 连接、发送 REGISTER、处理 ACK、启动心跳协程；`deregister()` 发送 DEREGISTER 并关闭连接
-- [ ] 4.2 创建 `src_lua/shared/msg_router.lua`：封装微服务间消息通信 — `send(dst_service, dst_key, body)` 构造消息并发送到 Router、`request(dst_service, dst_key, body, timeout)` 发送请求并等待响应（支持超时）、`on_message(callback)` 注册消息处理回调
-- [ ] 4.3 定义微服务类型枚举：在 `src_lua/shared/service_types.lua` 中定义 `SERVICE_TYPE` 枚举（GAME=0x01, FRIEND=0x02, PVP=0x03, PVE=0x04, TRADE=0x05, GUILD=0x06, CHAT=0x07, MAIL=0x08）
-- [ ] 4.4 创建好友服务示例 `src_lua/services/friend/`：`init.lua`（入口，加载共享库，向 Router 注册）、`friend_logic.lua`（好友业务逻辑：添加/删除好友、好友列表、在线状态查询）、`friend_db.lua`（好友数据持久化，通过 DBProxy 读写）
-- [ ] 4.5 好友服务集成 DBProxy：好友服务进程启动时连接独立的 DBProxy 实例（端口 9013），使用数据库 `chaos_{game_id}_friend`，集合 `relationships`（好友关系）、`requests`（好友请求）
-- [ ] 4.6 更新 Gateway 路由配置：添加 msg_type 0x0300-0x030F → FRIEND 服务的路由规则，Gateway 从 Router 动态查询 FRIEND 服务地址
-- [ ] 4.7 编写好友服务集成测试：好友添加/删除流程、好友列表查询、跨进程在线状态查询（FRIEND → Router → GAME → Router → FRIEND）
-
----
-
-## Phase 5: 全球多区域集成 + 全链路测试
-
-- [ ] 5.1 全球多区域部署：配置三个大区（region=asia-east, region=eu-west, region=us-west），每个大区独立启动完整集群（1 个 Gateway + Router 集群 + GAME 服务 + FRIEND 服务 + PVP 服务 + 各自 DBProxy + MongoDB），验证大区之间 Router 全球网格 TCP 连接建立
-- [ ] 5.2 跨大区消息路由测试：asia-east 玩家向 us-west 玩家发送消息（如 PVP 挑战），验证消息经 asia-east Router → us-west Router → 目标微服务的完整链路，验证跨区消息格式（source_region + target_region）正确传递
-- [ ] 5.3 全球同服交互测试：跨服 PVP（asia-east vs us-west）、全球聊天（三区互通）、跨区交易（eu-west ↔ asia-east），验证多区域玩家在同一游戏世界中的交互正确性
-- [ ] 5.4 全链路集成测试：启动完整多区域环境，验证客户端 → Gateway → Router → 微服务 → DBProxy → MongoDB 的完整数据流，覆盖同区和跨区两种场景
-- [ ] 5.5 异常场景测试：Router 单实例故障（集群中其他 Router 接管）、微服务进程故障（Router 健康检查剔除 + 一致性哈希环更新）、跨区连接断开（本地队列暂存 + 恢复后重发）、Router 集群网络分区恢复（路由表合并）、单个大区整体故障（其他大区正常运行不受影响）
-- [ ] 5.6 扩缩容测试：好友服务从 1 进程扩容到 3 进程（验证一致性哈希再均衡 + 新请求正确路由）、缩容（DRAINING → DEREGISTER → 请求迁移到其他进程）、故障缩容（进程崩溃 → Router 检测 → 自动剔除）
-- [ ] 5.7 性能基准测试：Router 路由查询延迟（P50/P99）、一致性哈希查找性能（O(log N) vs 进程数）、Router 集群广播延迟、跨大区消息延迟（模拟 50ms/150ms/300ms 网络延迟，对应同洲/跨洲/跨洋）、微服务注册/注销延迟、Gateway 路由表查询缓存命中率
+- [ ] 3.1 创建 `src_lua/shared/` 目录，创建 `service_registry.lua`：封装微服务注册/注销/心跳逻辑 — `register(service_type, process_id, address)` 自动完成 TCP 连接、发送 REGISTER、处理 ACK、启动心跳协程；`deregister()` 发送 DEREGISTER 并关闭连接
+- [ ] 3.2 创建 `src_lua/shared/msg_router.lua`：封装微服务间消息通信 — `send(dst_service, dst_key, body)` 构造消息并发送到 Router、`request(dst_service, dst_key, body, timeout)` 发送请求并等待响应（支持超时）、`on_message(callback)` 注册消息处理回调
+- [ ] 3.3 定义微服务类型枚举：在 `src_lua/shared/service_types.lua` 中定义 `SERVICE_TYPE` 枚举（GAME=0x01, FRIEND=0x02, PVP=0x03, PVE=0x04, TRADE=0x05, GUILD=0x06, CHAT=0x07, MAIL=0x08）
+- [ ] 3.4 创建好友服务示例 `src_lua/services/friend/`：`init.lua`（入口，加载共享库，向 Router 注册）、`friend_logic.lua`（好友业务逻辑：添加/删除好友、好友列表、在线状态查询）、`friend_db.lua`（好友数据持久化，通过 DBProxy 读写）
+- [ ] 3.5 好友服务集成 DBProxy：好友服务进程启动时连接独立的 DBProxy 实例（端口 9013），使用数据库 `chaos_{game_id}_friend`，集合 `relationships`（好友关系）、`requests`（好友请求）
+- [ ] 3.6 编写好友服务集成测试：好友添加/删除流程、好友列表查询、跨进程在线状态查询（GAME → Router → FRIEND → Router → GAME）
 
 ---
 
-**总进度：0/37 待开始（0%）**
+## Phase 4: 全球多区域集成 + 全链路测试
+
+- [ ] 4.1 全球多区域部署：配置三个大区（region=asia-east, region=eu-west, region=us-west），每个大区独立启动完整集群（1 个 Gateway + Router 集群 + GAME 服务 + FRIEND 服务 + PVP 服务 + 各自 DBProxy + MongoDB），验证大区之间 Router 全球网格 TCP 连接建立
+- [ ] 4.2 跨大区消息路由测试：asia-east 玩家向 us-west 玩家发送消息（如 PVP 挑战），验证消息经 asia-east Router → us-west Router → 目标微服务的完整链路，验证跨区消息格式（source_region + target_region）正确传递
+- [ ] 4.3 全球同服交互测试：跨服 PVP（asia-east vs us-west）、全球聊天（三区互通）、跨区交易（eu-west ↔ asia-east），验证多区域玩家在同一游戏世界中的交互正确性
+- [ ] 4.4 全链路集成测试：启动完整多区域环境，验证客户端 → Gateway 直连 Game + Game↔Game 经 Router + 微服务 → DBProxy → MongoDB 的完整数据流，覆盖同区和跨区两种场景
+- [ ] 4.5 异常场景测试：Router 单实例故障（集群中其他 Router 接管）、微服务进程故障（Router 健康检查剔除 + 一致性哈希环更新）、跨区连接断开（本地队列暂存 + 恢复后重发）、Router 集群网络分区恢复（路由表合并）、单个大区整体故障（其他大区正常运行不受影响）
+- [ ] 4.6 扩缩容测试：好友服务从 1 进程扩容到 3 进程（验证一致性哈希再均衡 + 新请求正确路由）、缩容（DRAINING → DEREGISTER → 请求迁移到其他进程）、故障缩容（进程崩溃 → Router 检测 → 自动剔除）
+- [ ] 4.7 性能基准测试：Router 路由查询延迟（P50/P99）、一致性哈希查找性能（O(log N) vs 进程数）、Router 集群广播延迟、跨大区消息延迟（模拟 50ms/150ms/300ms 网络延迟，对应同洲/跨洲/跨洋）、微服务注册/注销延迟
+
+---
+
+**总进度：0/39 待开始（0%）**
 
 **依赖关系**：
-- Phase 2 依赖 Phase 1（Gateway 重构需要 ce_net_base）
-- Phase 3 依赖 Phase 1（Router 使用 ce_net_base，跨区路由使用 Phase 1 的跨区连接框架）
-- Phase 4 依赖 Phase 3（微服务注册和通信需要 Router）
-- Phase 5 依赖 Phase 1 + Phase 3 + Phase 4（全球多区域集成需要完整链路和跨区路由基础）
+- Phase 2 依赖 Phase 1（Router 使用 ce_net_base，跨区路由使用 Phase 1 的跨区连接框架）
+- Phase 3 依赖 Phase 2（微服务注册和 Game↔Game 通信需要 Router）
+- Phase 4 依赖 Phase 1 + Phase 2 + Phase 3（全球多区域集成需要完整链路和跨区路由基础）
