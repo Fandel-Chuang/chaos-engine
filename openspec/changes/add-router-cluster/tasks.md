@@ -4,7 +4,7 @@
 
 ---
 
-## Phase 1: ce_net_base 共享网络库（C 内核）
+## Phase 1: ce_net_base 共享网络库 + 跨区路由基础（C 内核）
 
 - [ ] 1.1 创建 `src_c/network/ce_net_base.h`：定义 `CeNetBaseConn` 连接句柄、`CeNetBasePool` 连接池句柄、消息类型枚举、`ce_net_base_connect/disconnect/reconnect` 连接管理接口、`ce_net_base_send/recv` 消息收发接口、`ce_net_base_heartbeat_start/stop/is_alive` 心跳接口、`ce_net_base_pool_create/acquire/release` 连接池接口、`ce_net_base_pack/unpack` 协议编解码接口
 - [ ] 1.2 实现 `ce_net_base_connect()`：建立 TCP 连接（非阻塞 socket + io_uring/posix 异步 I/O），支持连接超时配置（默认 5s），返回 `CeNetBaseConn` 句柄
@@ -15,6 +15,9 @@
 - [ ] 1.7 实现自动重连（`ce_net_base_reconnect`）：指数退避策略（1s, 2s, 4s, 8s, 最大 30s），最大重试次数可配置
 - [ ] 1.8 更新 `src_c/network/CMakeLists.txt`：添加 `ce_net_base.c` 源文件，编译为 `engine_net_base` 静态库，链接 `engine_core`
 - [ ] 1.9 编写 ce_net_base 单元测试：连接建立/断开、消息收发（粘包/拆包）、心跳超时检测、连接池获取/归还、自动重连
+- [ ] 1.10 定义跨区消息格式：在 `ce_net_base.h` 中定义跨区消息头结构（length + type + source_region + target_region + payload），定义大区标识枚举（asia-east=0x0001, eu-west=0x0002, us-west=0x0003, us-east=0x0004, sa-east=0x0005）
+- [ ] 1.11 实现跨区 TCP 长连接框架：`ce_net_base_cross_region_connect(region_id, router_list)` 建立到目标大区 Router 的 TCP 长连接，`ce_net_base_cross_region_send(conn, source_region, target_region, msg)` 发送跨区消息，`ce_net_base_cross_region_recv(conn, ...)` 接收跨区消息
+- [ ] 1.12 实现全球 Router 网格连接管理：维护跨区连接表 `{target_region → CeNetBaseConn}`，支持全互联拓扑自动建立连接，新增大区时动态添加连接
 
 ---
 
@@ -38,7 +41,7 @@
 - [ ] 3.5 创建 `router.lua`：实现消息路由逻辑 — 解析路由请求（直接路由 vs 哈希路由）、调用 `hash_ring.get_node()` 或 `registry.lookup()` 获取目标地址、转发消息到目标进程、处理响应回传、路由失败处理（SERVICE_UNAVAILABLE / DESTINATION_UNREACHABLE）
 - [ ] 3.6 创建 `health.lua`：实现健康检查 — 每 1s 向所有注册进程发送 PING、等待 PONG 响应、连续 3 次超时判定故障、故障时调用 `registry.deregister()` + `hash_ring.remove_node()` + 广播 `HEALTH_CHANGE`、进程恢复时重新加入
 - [ ] 3.7 创建 `cluster.lua`：实现 Router 集群内部通信 — 集群成员管理（加入/离开）、广播同步（REGISTER_NOTIFY / DEREGISTER_NOTIFY / HEALTH_CHANGE）、全量同步（SYNC_REQUEST / SYNC_RESPONSE，新 Router 加入时）、序列号机制（防重复）、网络分区恢复合并
-- [ ] 3.8 创建 `cross_region.lua`：实现跨区域转发 — 区域路由表管理（`{region_id → [router_addresses]}`）、跨区域 TCP 连接管理（全互联）、跨区域消息转发（识别目标区域 → 选择目标 Router → 转发）、连接断开时本地队列暂存
+- [ ] 3.8 创建 `cross_region.lua`：实现跨大区路由 — 全球区域路由表管理（`{region_id → [router_addresses]}`）、跨区 TCP 长连接管理（基于 Phase 1 的 ce_net_base 跨区连接框架，全互联拓扑组成全球 Router 网格）、跨区消息转发（识别目标大区 → 选择目标 Router → 转发，消息携带 source_region + target_region）、连接断开时本地队列暂存、新增大区时动态加入全球网格
 - [ ] 3.9 创建 `protocol.lua`：实现 Router 内部协议编解码（复用 ce_net_base 的二进制协议格式），定义 Router 消息类型（REGISTER/DEREGISTER/QUERY/ROUTE/PING/PONG/REGISTER_NOTIFY/DEREGISTER_NOTIFY/HEALTH_CHANGE/SYNC_REQUEST/SYNC_RESPONSE/REGION_UPDATE/CROSS_REGION_FORWARD）
 - [ ] 3.10 创建 `src_c/runtime/ce_router_main.c`：Router 进程入口 — 初始化 Lua VM，加载 `init.lua`，注册 ce_net_base C 函数到 Lua，进入主循环
 - [ ] 3.11 更新 CMakeLists.txt：添加 `CHAOS_HAS_ROUTER` option，添加 `ce_router_main` 可执行文件目标，链接 `engine_net_base` 和 Lua
@@ -57,21 +60,22 @@
 
 ---
 
-## Phase 5: 跨区域路由 + 集成测试
+## Phase 5: 全球多区域集成 + 全链路测试
 
-- [ ] 5.1 跨区域 Router 互联：配置两个模拟区域（region=us-west, region=ap-southeast），各启动 1 个 Router + 1 个 Gateway + 微服务，验证 Router 间 TCP 连接建立和跨区域消息转发
-- [ ] 5.2 跨区域消息路由测试：us-west 玩家向 ap-southeast 玩家发送消息（如 PVP 挑战），验证消息经 us-west Router → ap-southeast Router → 目标微服务的完整链路
-- [ ] 5.3 全链路集成测试：启动 Gateway + Router 集群（2 实例）+ GAME 服务 + FRIEND 服务 + PVP 服务 + 各自 DBProxy + MongoDB，验证客户端 → Gateway → Router → 微服务 → DBProxy → MongoDB 的完整数据流
-- [ ] 5.4 异常场景测试：Router 单实例故障（集群中其他 Router 接管）、微服务进程故障（Router 健康检查剔除 + 一致性哈希环更新）、跨区域连接断开（本地队列暂存 + 恢复后重发）、Router 集群网络分区恢复（路由表合并）
-- [ ] 5.5 扩缩容测试：好友服务从 1 进程扩容到 3 进程（验证一致性哈希再均衡 + 新请求正确路由）、缩容（DRAINING → DEREGISTER → 请求迁移到其他进程）、故障缩容（进程崩溃 → Router 检测 → 自动剔除）
-- [ ] 5.6 性能基准测试：Router 路由查询延迟（P50/P99）、一致性哈希查找性能（O(log N) vs 进程数）、Router 集群广播延迟、跨区域消息延迟（模拟 50ms/150ms 网络延迟）、微服务注册/注销延迟、Gateway 路由表查询缓存命中率
+- [ ] 5.1 全球多区域部署：配置三个大区（region=asia-east, region=eu-west, region=us-west），每个大区独立启动完整集群（1 个 Gateway + Router 集群 + GAME 服务 + FRIEND 服务 + PVP 服务 + 各自 DBProxy + MongoDB），验证大区之间 Router 全球网格 TCP 连接建立
+- [ ] 5.2 跨大区消息路由测试：asia-east 玩家向 us-west 玩家发送消息（如 PVP 挑战），验证消息经 asia-east Router → us-west Router → 目标微服务的完整链路，验证跨区消息格式（source_region + target_region）正确传递
+- [ ] 5.3 全球同服交互测试：跨服 PVP（asia-east vs us-west）、全球聊天（三区互通）、跨区交易（eu-west ↔ asia-east），验证多区域玩家在同一游戏世界中的交互正确性
+- [ ] 5.4 全链路集成测试：启动完整多区域环境，验证客户端 → Gateway → Router → 微服务 → DBProxy → MongoDB 的完整数据流，覆盖同区和跨区两种场景
+- [ ] 5.5 异常场景测试：Router 单实例故障（集群中其他 Router 接管）、微服务进程故障（Router 健康检查剔除 + 一致性哈希环更新）、跨区连接断开（本地队列暂存 + 恢复后重发）、Router 集群网络分区恢复（路由表合并）、单个大区整体故障（其他大区正常运行不受影响）
+- [ ] 5.6 扩缩容测试：好友服务从 1 进程扩容到 3 进程（验证一致性哈希再均衡 + 新请求正确路由）、缩容（DRAINING → DEREGISTER → 请求迁移到其他进程）、故障缩容（进程崩溃 → Router 检测 → 自动剔除）
+- [ ] 5.7 性能基准测试：Router 路由查询延迟（P50/P99）、一致性哈希查找性能（O(log N) vs 进程数）、Router 集群广播延迟、跨大区消息延迟（模拟 50ms/150ms/300ms 网络延迟，对应同洲/跨洲/跨洋）、微服务注册/注销延迟、Gateway 路由表查询缓存命中率
 
 ---
 
-**总进度：0/34 待开始（0%）**
+**总进度：0/37 待开始（0%）**
 
 **依赖关系**：
 - Phase 2 依赖 Phase 1（Gateway 重构需要 ce_net_base）
-- Phase 3 依赖 Phase 1（Router 使用 ce_net_base）
+- Phase 3 依赖 Phase 1（Router 使用 ce_net_base，跨区路由使用 Phase 1 的跨区连接框架）
 - Phase 4 依赖 Phase 3（微服务注册和通信需要 Router）
-- Phase 5 依赖 Phase 3 + Phase 4（集成测试需要完整链路）
+- Phase 5 依赖 Phase 1 + Phase 3 + Phase 4（全球多区域集成需要完整链路和跨区路由基础）

@@ -4,7 +4,7 @@
 
 ## 概述
 
-定义 ChaosEngine 微服务拆分规范。将单体 Game 进程按功能模块拆分为独立的微服务进程（好友/PVP/PVE/交易/公会等），每个微服务为独立的 Game 进程，通过 Router 进行服务注册和服务间通信。每个微服务连接独立的 DBProxy 实例实现数据隔离，支持独立扩缩容。
+定义 ChaosEngine 微服务拆分规范。将单体 Game 进程按功能模块拆分为独立的微服务进程（好友/PVP/PVE/交易/公会等），每个微服务为独立的 Game 进程，通过 Router 进行服务注册和服务间通信。每个微服务连接独立的 DBProxy 实例实现数据隔离，支持独立扩缩容。**微服务需感知区域归属**：每个微服务进程明确知道自己所属的大区（如 asia-east），跨区交互通过 Router 全球网格完成。
 
 ---
 
@@ -48,6 +48,41 @@
 - **THEN** process_id=2002 向 Router 注册，加入一致性哈希环
 - **AND** 部分 player_id 的好友请求自动路由到 process_id=2002
 - **AND** 两个进程独立运行，通过 Router 通信（如查询对方管理的玩家在线状态）
+
+---
+
+### Requirement: 区域归属感知
+
+每个微服务进程 MUST 明确感知自己所属的大区，并在注册和通信中携带区域信息。
+
+区域归属 MUST 满足以下要求：
+- 微服务进程启动时 MUST 从配置中读取所属大区标识（如 `region: "asia-east"`）
+- 向 Router 注册时 MUST 携带区域信息：`{service_type, process_id, address, region}`
+- 微服务发送跨区消息时 MUST 通过 Router 全球网格路由，消息包含 `source_region` 和 `target_region`
+- 同区微服务间通信 MUST 优先使用本区 Router 集群，不经过跨区连接
+- 微服务 MUST 能处理来自其他大区的请求（如跨服 PVP 挑战），并根据 `source_region` 做出差异化处理
+
+#### Scenario: 微服务感知区域归属
+
+- **WHEN** asia-east 大区的好友服务进程（FRIEND/2001）启动
+- **THEN** 进程从配置读取 `region: "asia-east"`
+- **AND** 向 Router 注册时携带区域信息：`{service_type: "FRIEND", process_id: 2001, address: "10.0.1.10:9100", region: "asia-east"}`
+- **AND** Router 将区域信息纳入服务注册表
+- **AND** 微服务日志中标注区域标识
+
+#### Scenario: 同区通信优先
+
+- **WHEN** asia-east 的 FRIEND 服务需要查询 asia-east 的 GAME 服务
+- **THEN** 消息通过本区 Router 集群路由，不经过跨区连接
+- **AND** 消息不携带跨区标识（source_region == target_region，Router 识别为同区消息）
+- **AND** 延迟为同区内网延迟（<1ms）
+
+#### Scenario: 跨区通信
+
+- **WHEN** asia-east 的 PVP 服务收到 us-west 玩家的跨服挑战请求
+- **THEN** PVP 服务从消息中识别 `source_region: "us-west"`
+- **AND** PVP 服务根据 source_region 执行跨区延迟补偿逻辑
+- **AND** 响应消息携带 `target_region: "us-west"`，经 Router 全球网格返回
 
 ---
 

@@ -13,14 +13,14 @@ ChaosEngine v0.3 已具备 Gateway 网络接入层和 DBProxy 数据持久化层
 1. **无服务发现机制**：Gateway 通过静态配置转发消息到 Game 进程，无法动态感知 Game 进程的上线/下线/扩缩容。新增 Game 进程需要手动修改 Gateway 配置并重启，运维成本高。
 2. **无服务器间消息路由**：不同 Game 进程之间（如好友服务需要查询另一个玩家的在线状态）无法直接通信。当前所有 Game 逻辑耦合在单一进程中，无法按功能模块拆分。
 3. **微服务拆分缺乏基础设施**：随着游戏功能增长（好友、PVP、PVE、交易、公会等），单一 Game 进程成为性能瓶颈和单点故障。需要将不同功能模块拆分为独立微服务进程，但缺乏统一的服务间通信层。
-4. **全球同服缺乏跨区域路由**：多区域部署时，不同区域的玩家可能需要在同一个游戏世界交互（如跨服 PVP），但当前没有跨区域消息转发机制。
+4. **全球同服多区部署是核心架构需求**：ChaosEngine 定位为全球同服游戏引擎，必须原生支持多区域部署（亚洲区/欧洲区/美洲区等）。每个大区独立部署完整集群，大区之间通过 Router 跨区路由进行交互（如跨服 PVP、全球聊天、跨区交易）。跨区域消息转发不是延后功能，而是 Phase 1 就必须具备的核心能力。
 5. **Gateway 与 Router 网络逻辑重复**：Gateway 和 Router 都需要 TCP 连接管理、心跳检测、二进制协议编解码等基础网络能力。若不抽离共享库，将导致代码重复和维护负担。
 
 引入 Router 集群后，可实现：
 - Router 作为服务注册中心，Game 进程启动时自动注册，Gateway 从 Router 查询路由表
 - 服务器间消息通过 Router 中转，支持按 player_id 一致性哈希路由到目标微服务进程
 - 微服务按功能模块拆分（好友/PVP/PVE/交易等独立 Game 进程），通过 Router 通信
-- 全球同服：多个物理区域部署 Router，跨区域消息通过 Router 间 TCP 互联转发
+- 全球同服：全球分多个大区（亚洲区/欧洲区/美洲区），每个大区独立部署完整集群（Gateway + Router 集群 + 微服务 + DBProxy + MongoDB）。大区之间通过 Router 跨区 TCP 长连接互联，组成全球 Router 网格，支持跨区消息路由（跨服 PVP、全球聊天、跨区交易等）
 - 共享网络库 `ce_net_base`（C）抽离 Gateway 和 Router 的公共网络逻辑，避免代码重复
 
 ## What Changes
@@ -72,13 +72,13 @@ ChaosEngine v0.3 已具备 Gateway 网络接入层和 DBProxy 数据持久化层
 
 ### MVP 范围
 
-**Phase 1：ce_net_base 共享网络库** — 从 Gateway 抽离 TCP 连接管理、二进制协议编解码、心跳检测、连接池等公共逻辑为独立 C 库。Gateway 重构以链接 ce_net_base。验证 Gateway 功能不受影响。
+**Phase 1：ce_net_base 共享网络库 + 跨区路由基础** — 从 Gateway 抽离 TCP 连接管理、二进制协议编解码、心跳检测、连接池等公共逻辑为独立 C 库。Gateway 重构以链接 ce_net_base。同时实现 Router 跨区路由基础：定义跨区消息格式（包含 source_region + target_region）、区域间 Router TCP 长连接互联、全球 Router 网格拓扑。验证 Gateway 功能不受影响，验证跨区消息格式和连接框架。
 
 **Phase 2：Router 基础** — Router 进程启动、服务注册与发现（Game 进程启动时向 Router 注册）、消息路由（player_id → 一致性哈希 → 目标进程）、Router 集群内广播路由表。Gateway 改为从 Router 查询路由表。
 
 **Phase 3：微服务拆分** — 定义微服务类型枚举，以好友服务为示例拆分为独立 Game 进程。好友服务通过 Router 注册，客户端消息经 Gateway → Router → 好友服务。验证服务间通信正确性。
 
-**Phase 4：跨区域路由** — Router 间 TCP 互联，跨区域消息转发。多区域部署（如 us-west、ap-southeast），玩家跨区域交互（如跨服 PVP）。
+**Phase 4：跨区域路由集成** — 基于 Phase 1 的跨区路由基础，完成全球多区域部署的完整集成。多区域部署（如 us-west、ap-southeast、eu-west），每个大区独立部署完整集群。玩家跨区域交互（如跨服 PVP、全球聊天、跨区交易）的端到端验证。跨区消息完整链路测试。
 
 **Phase 5：集成与测试** — 全链路集成测试（Gateway → Router → 微服务 → DBProxy），异常场景测试（Router 故障、微服务扩缩容、跨区域网络分区），性能基准测试。
 
