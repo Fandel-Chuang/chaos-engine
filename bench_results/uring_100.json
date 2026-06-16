@@ -1,0 +1,21 @@
+{
+  "backend": "io_uring",
+  "target_connections": 100,
+  "peak_connections": 100,
+  "duration_sec": 10.00,
+  "total_requests": 1363373,
+  "total_errors": 0,
+  "total_bytes": 87255872,
+  "qps": 136337.25,
+  "bandwidth_mbps": 69.80,
+  "latency_us": {
+    "avg": 0.37,
+    "min": 0.21,
+    "max": 89.21,
+    "p50": 1.00,
+    "p90": 1.00,
+    "p99": 2.15,
+    "p99.9": 21.54
+  },
+  "cpu_percent": 100.00
+}

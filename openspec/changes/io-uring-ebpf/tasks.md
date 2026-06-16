@@ -74,7 +74,7 @@
 
 - [x] 5.1 服务端主循环切换到 io_uring 事件循环：修改 `ce_server_main.c`，集成 `ce_async_init` + `ce_async_submit` + `ce_async_wait` 模式
 - [x] 5.2 ECS 更新与 I/O 事件循环协同：在 I/O 等待间隙执行 `ce_ecs_update` 和 `ce_cell_update`
-- [ ] 5.3 性能测试报告：记录 io_uring vs POSIX 的完整性能对比数据（QPS、延迟分布、CPU 利用率、内存使用）
+- [x] 5.3 性能测试报告：记录 io_uring vs POSIX 的完整性能对比数据（QPS、延迟分布、CPU 利用率、内存使用）
 - [x] 5.4 更新 spec 文档：`docs/spec/chaos-engine-io_uring-ebpf-spec-v0.1.md` → v1.0
 - [x] 5.5 编写用户文档：如何在 CMake 中启用 io_uring/eBPF，如何运行测试程序，如何解读 eBPF 统计输出
 - [x] 5.6 编写开发者文档：如何添加新的 BPF 程序，如何扩展异步 I/O 后端
@@ -102,8 +102,8 @@
 
 ---
 
-**总进度：48/51 已完成（94%）**
+**总进度：49/51 已完成（96%）**
 
-**已完成（Phase 1-3 + Phase 5 集成 + Phase 7 测试 + 性能基准）**：io_uring 基础集成（16 项）、io_uring 高级特性（6 项）、eBPF 可观测性（18 项）、服务端主循环集成（2 项）、单元/集成/压力测试（7 项）、性能基准测试（2 项）。
+**已完成（Phase 1-3 + Phase 5 集成 + Phase 7 测试 + 性能基准 + 报告）**：io_uring 基础集成（16 项）、io_uring 高级特性（6 项）、eBPF 可观测性（18 项）、服务端主循环集成（2 项）、单元/集成/压力测试（7 项）、性能基准测试（2 项）、性能测试报告（1 项）。
 
-**待完成**：性能测试报告（1 项）、eBPF 网络优化（6 项，Phase 4 延后）、跨平台扩展（4 项）。
+**待完成**：eBPF 网络优化（6 项，Phase 4 延后）、跨平台扩展（4 项）。

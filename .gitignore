@@ -27,3 +27,4 @@ bin/
 *.dll
 *.exe
 build_bench/
+build_test/

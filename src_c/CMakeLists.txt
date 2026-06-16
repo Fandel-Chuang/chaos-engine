@@ -273,6 +273,19 @@ if(CHAOS_USE_IO_URING AND LIBURING_FOUND)
 endif()
 
 # ============================================================
+# Router 进程可执行文件 (Lua 驱动)
+# ============================================================
+add_executable(chaos_router
+    runtime/ce_router_main.c
+)
+target_include_directories(chaos_router PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LUA_HEADERS_DIR}
+)
+target_link_libraries(chaos_router PRIVATE engine_core)
+set_target_properties(chaos_router PROPERTIES LINKER_LANGUAGE C)
+
+# ============================================================
 # Admin IPC 模块
 # ============================================================
 add_subdirectory(admin_ipc)

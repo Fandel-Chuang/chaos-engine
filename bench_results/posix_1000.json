@@ -1,0 +1,21 @@
+{
+  "backend": "posix",
+  "target_connections": 1000,
+  "peak_connections": 1000,
+  "duration_sec": 10.00,
+  "total_requests": 4628804,
+  "total_errors": 0,
+  "total_bytes": 296243456,
+  "qps": 462865.20,
+  "bandwidth_mbps": 236.99,
+  "latency_us": {
+    "avg": 746.83,
+    "min": 312.15,
+    "max": 1304.19,
+    "p50": 464.16,
+    "p90": 464.16,
+    "p99": 464.16,
+    "p99.9": 464.16
+  },
+  "cpu_percent": 99.99
+}
