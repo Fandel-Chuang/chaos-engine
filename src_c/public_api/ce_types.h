@@ -20,6 +20,7 @@ typedef int32_t  CeResult;
 
 #define CE_OK     0
 #define CE_ERR   -1
+#define CE_ERR_VALIDATION  -2   /* 值域校验失败 */
 #define CE_TRUE   1
 #define CE_FALSE  0
 

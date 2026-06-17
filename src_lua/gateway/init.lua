@@ -40,6 +40,7 @@ local conn_mgr  = require("gateway.connection")
 local router    = require("gateway.router")
 local heartbeat = require("gateway.heartbeat")
 local server    = require("gateway.server")
+local game_conn = require("gateway.game_connector")
 
 -- ============================================================
 -- Argument Parsing
@@ -60,6 +61,12 @@ local function parse_args()
             local host, port = args[i + 1]:match("^([^:]+):(%d+)$")
             if host and port then
                 config.backends = { { host = host, port = tonumber(port) } }
+            end
+            i = i + 1
+        elseif arg == "--game-server" and args[i + 1] then
+            local host, port = args[i + 1]:match("^([^:]+):(%d+)$")
+            if host and port then
+                config.game_servers = { { host = host, port = tonumber(port) } }
             end
             i = i + 1
         elseif arg == "--max-connections" and args[i + 1] then
@@ -83,6 +90,7 @@ Usage: lua init.lua [OPTIONS]
 Options:
   --port PORT               TCP listen port (default: 9000)
   --backend HOST:PORT       Backend Game service address (default: 127.0.0.1:7777)
+  --game-server HOST:PORT   Game server connection (default: 127.0.0.1:9100)
   --max-connections N       Max client connections (default: 10000)
   --log-level LEVEL         Log level: trace, debug, info, warn, error (default: info)
   --help, -h                Show this help
@@ -190,6 +198,103 @@ local function heartbeat_loop()
 
         sleep(config.heartbeat_interval)
     end
+end
+
+-- ============================================================
+-- Game Server Connections
+-- ============================================================
+
+-- Table of active GameConnector instances, indexed by server index.
+local game_connections = {}
+
+--- Connect to all configured game servers.
+local function connect_to_game_servers()
+    local servers = config.game_servers or {}
+    if #servers == 0 then
+        log("info", "GAME", "No game servers configured, skipping game connections")
+        return
+    end
+
+    for i, server_cfg in ipairs(servers) do
+        local host = server_cfg.host or "127.0.0.1"
+        local port = server_cfg.port or 9100
+        local name = string.format("game_%d", i)
+
+        local connector = game_conn.GameConnector.new(name)
+        local ok, err = connector:connect(host, port)
+
+        if ok then
+            game_connections[i] = connector
+            log("info", "GAME", string.format(
+                "Gateway connected to Game at %s:%d (index=%d)",
+                host, port, i
+            ))
+            print(string.format(
+                "Gateway connected to Game at %s:%d",
+                host, port
+            ))
+        else
+            log("warn", "GAME", string.format(
+                "Failed to connect to Game at %s:%d: %s",
+                host, port, tostring(err)
+            ))
+        end
+    end
+
+    log("info", "GAME", string.format(
+        "Game connections: %d/%d established",
+        table_count(game_connections), #servers
+    ))
+end
+
+--- Send data to a specific game server by index.
+--- @param server_index  number  1-based index into game_servers config
+--- @param data          string  Data to send
+--- @return boolean  true on success
+--- @return string|nil  Error message on failure
+_G.gateway = _G.gateway or {}
+_G.gateway.send_to_game = function(server_index, data)
+    local conn = game_connections[server_index]
+    if not conn then
+        return false, "no game connection at index " .. tostring(server_index)
+    end
+    return conn:send(data)
+end
+
+--- Broadcast data to all connected game servers.
+--- @param data  string  Data to send
+--- @return number  Count of successful sends
+_G.gateway.broadcast_to_games = function(data)
+    local count = 0
+    for i, conn in pairs(game_connections) do
+        local ok, err = conn:send(data)
+        if ok then
+            count = count + 1
+        else
+            log("warn", "GAME", string.format(
+                "Broadcast to game_%d failed: %s", i, tostring(err)
+            ))
+        end
+    end
+    return count
+end
+
+--- Disconnect all game server connections.
+local function disconnect_game_servers()
+    for i, conn in pairs(game_connections) do
+        conn:disconnect()
+        log("info", "GAME", string.format("Disconnected from game_%d", i))
+    end
+    game_connections = {}
+end
+
+--- Helper: count entries in a table.
+local function table_count(t)
+    local n = 0
+    for _ in pairs(t) do
+        n = n + 1
+    end
+    return n
 end
 
 -- ============================================================
@@ -340,6 +445,7 @@ local function graceful_shutdown()
     heartbeat.stop()
     server.stop()
     router.close_backend_pool()
+    disconnect_game_servers()
     log("info", "MAIN", "Shutdown complete")
     os.exit(0)
 end
@@ -379,6 +485,9 @@ if not srv then
 end
 
 log("info", "MAIN", "Gateway initialization complete")
+
+-- Connect to game servers
+connect_to_game_servers()
 
 -- Run main event loop (blocks forever)
 main_loop()

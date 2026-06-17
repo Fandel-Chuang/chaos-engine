@@ -38,6 +38,7 @@ banner() { echo -e "${CYAN}$1${NC}"; }
 # ──────────────────────────────────────────────
 GATEWAY_PORT="9000"
 BACKEND="127.0.0.1:7777"
+GAME_SERVER=""
 MAX_CONNECTIONS="10000"
 LOG_LEVEL="info"
 LOG_DIR="$PROJECT_DIR/logs"
@@ -57,6 +58,10 @@ while [[ $# -gt 0 ]]; do
             BACKEND="$2"
             shift 2
             ;;
+        --game-server)
+            GAME_SERVER="$2"
+            shift 2
+            ;; 
         --max-connections)
             MAX_CONNECTIONS="$2"
             shift 2
@@ -71,6 +76,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --port PORT             TCP listen port (default: 9000)"
             echo "  --backend HOST:PORT     Backend Game service (default: 127.0.0.1:7777)"
+            echo "  --game-server HOST:PORT Game server connection (default: 127.0.0.1:9100)"
             echo "  --max-connections N     Max client connections (default: 10000)"
             echo "  --log-level LEVEL       Log level: trace, debug, info, warn, error (default: info)"
             echo "  --help, -h              Show this help"

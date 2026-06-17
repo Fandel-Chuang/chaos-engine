@@ -281,6 +281,38 @@ set_target_properties(test_net_base PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME net_base COMMAND test_net_base WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
 # ============================================================
+# Replication Manager 单元测试
+# ============================================================
+add_executable(test_replication unit/test_replication.c)
+target_include_directories(test_replication PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_replication PRIVATE engine_core)
+set_target_properties(test_replication PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME replication COMMAND test_replication WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ---- test_rpc_channel ----
+add_executable(test_rpc_channel unit/test_rpc_channel.c)
+target_include_directories(test_rpc_channel PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_rpc_channel PRIVATE engine_core)
+set_target_properties(test_rpc_channel PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME rpc_channel COMMAND test_rpc_channel WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ---- test_mailbox (Phase 3: Mailbox 单元测试) ----
+add_executable(test_mailbox unit/test_mailbox.c)
+target_include_directories(test_mailbox PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_mailbox PRIVATE engine_core)
+set_target_properties(test_mailbox PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME mailbox COMMAND test_mailbox WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+# ============================================================
 # 性能基准测试 (Phase 2.5/2.6)
 # ============================================================
 add_subdirectory(bench)

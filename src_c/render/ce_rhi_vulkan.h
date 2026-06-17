@@ -11,6 +11,8 @@
 #include "render/ce_rhi.h"
 #include "core/ce_platform.h"
 #include <vulkan/vulkan.h>
+#include <X11/Xlib.h>
+#include <vulkan/vulkan_xlib.h>
 
 /* ---- 常量 ---- */
 
@@ -59,9 +61,12 @@ typedef struct CeRhiDevice {
 
     /* 窗口 */
     CeWindow*        window;
+    Display*         x11_display;
+    Window           x11_window;
     int              width;
     int              height;
     CeBool           should_close;
+    CeBool           frame_valid;   /* begin_frame 成功 */
 
     /* 调试 */
     VkDebugUtilsMessengerEXT debug_messenger;

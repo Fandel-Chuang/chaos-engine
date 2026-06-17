@@ -16,6 +16,12 @@ local config = {
         { host = "127.0.0.1", port = 7777 },
     },
 
+    -- TODO: 后续改为向 Router 查询本机 Game 列表
+    -- Game server connections (same-machine Game processes)
+    game_servers = {
+        { host = "127.0.0.1", port = 9100 },
+    },
+
     -- Heartbeat
     heartbeat_interval = 30,   -- seconds between heartbeat checks
     heartbeat_timeout  = 90,   -- seconds before declaring client dead

@@ -1,0 +1,49 @@
+// ChaosEngine 属性同步消息定义
+// Game → Gateway → Client 的属性复制协议
+
+include "chaos_common.fbs";
+
+namespace ChaosEngine;
+
+// ---- 字段值联合类型 ----
+
+union FieldValue {
+    Int8Value, Int16Value, Int32Value, Int64Value,
+    Uint8Value, Uint16Value, Uint32Value, Uint64Value,
+    FloatValue, DoubleValue, BoolValue,
+    StringValue, Vec2Value, Vec3Value, Vec4Value, QuatValue,
+    BlobValue
+}
+
+// ---- 属性同步消息 ----
+
+// 单个字段变化
+table FieldDelta {
+    component_id: uint16;       // 组件类型 ID
+    field_index:  uint16;       // 字段在组件中的索引
+    value:        FieldValue;   // 字段值
+}
+
+// 单个实体的属性变化
+table EntityDelta {
+    entity_id: uint64;          // 实体 ID
+    fields:    [FieldDelta];    // 变化的字段列表
+}
+
+// 属性同步消息 (帧末批量发送)
+table ReplicationMessage {
+    frame_id:   uint64;         // 帧序号
+    timestamp:  uint64;         // 服务器时间戳 (微秒)
+    entities:   [EntityDelta];  // 所有脏实体的 delta
+}
+
+// AOI 进入 — 全量同步实体所有非 SERVER_ONLY 字段
+table EntityFullSync {
+    entity_id: uint64;
+    fields:    [FieldDelta];    // 所有非 SERVER_ONLY 字段
+}
+
+// AOI 离开通知
+table EntityLeave {
+    entity_id: uint64;
+}

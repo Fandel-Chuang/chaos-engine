@@ -13,6 +13,7 @@ file(GLOB_RECURSE ENGINE_CORE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/network/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/ebpf/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/script/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/replication/*.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime/ce_engine.c"
 )
 
@@ -42,6 +43,7 @@ set_source_files_properties(${ENGINE_CORE_SOURCES} PROPERTIES LANGUAGE C)
 target_include_directories(engine_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/public_api
+        ${FLATBUFFERS_INCLUDE_DIR}
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/core
@@ -52,6 +54,7 @@ target_include_directories(engine_core
         ${CMAKE_CURRENT_SOURCE_DIR}/network
         ${CMAKE_CURRENT_SOURCE_DIR}/script
         ${CMAKE_CURRENT_SOURCE_DIR}/ebpf
+        ${CMAKE_CURRENT_SOURCE_DIR}/replication
         ${CMAKE_CURRENT_SOURCE_DIR}/runtime
         ${VULKAN_HEADERS_DIR}
         ${X11_HEADERS_DIR}
@@ -152,6 +155,9 @@ endif()
 set_target_properties(engine_core PROPERTIES
     LINKER_LANGUAGE C
 )
+
+# 确保 FlatBuffers schema 在 engine_core 之前编译
+add_dependencies(engine_core chaos_fbs)
 
 # ============================================================
 # 无头模式可执行文件（服务器 / 测试 / CI）

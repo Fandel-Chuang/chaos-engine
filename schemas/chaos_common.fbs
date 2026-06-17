@@ -1,0 +1,57 @@
+// ChaosEngine FlatBuffers 公共类型定义
+// 所有协议消息共享的基础类型
+
+namespace ChaosEngine;
+
+// ---- 数学类型 ----
+
+struct Vec2 {
+    x: float;
+    y: float;
+}
+
+struct Vec3 {
+    x: float;
+    y: float;
+    z: float;
+}
+
+struct Vec4 {
+    x: float;
+    y: float;
+    z: float;
+    w: float;
+}
+
+struct Quat {
+    x: float;
+    y: float;
+    z: float;
+    w: float;
+}
+
+// ---- 实体 ID ----
+
+table EntityId {
+    id: uint64;
+}
+
+// ---- 基础值类型 (用于 FieldValue union) ----
+
+table Int8Value    { v: int8; }
+table Int16Value   { v: int16; }
+table Int32Value   { v: int32; }
+table Int64Value   { v: int64; }
+table Uint8Value   { v: uint8; }
+table Uint16Value  { v: uint16; }
+table Uint32Value  { v: uint32; }
+table Uint64Value  { v: uint64; }
+table FloatValue   { v: float; }
+table DoubleValue  { v: double; }
+table BoolValue    { v: bool; }
+table StringValue  { v: string; }
+table Vec2Value    { v: Vec2; }
+table Vec3Value    { v: Vec3; }
+table Vec4Value    { v: Vec4; }
+table QuatValue    { v: Quat; }
+table BlobValue    { v: [ubyte]; }

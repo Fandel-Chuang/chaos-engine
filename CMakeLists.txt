@@ -28,6 +28,11 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 add_subdirectory(src_c)
 
 # ============================================================
+# FlatBuffers Schema 编译
+# ============================================================
+add_subdirectory(schemas)
+
+# ============================================================
 # 编辑器 (C++17) — 仅链接 engine_core，通过 extern "C" 调用
 # ============================================================
 if(CHAOS_BUILD_EDITOR)

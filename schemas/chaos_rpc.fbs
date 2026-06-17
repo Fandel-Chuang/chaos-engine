@@ -1,0 +1,55 @@
+// ChaosEngine RPC 消息定义
+// Client ↔ Server, Server ↔ Server 的远程过程调用协议
+
+include "chaos_common.fbs";
+include "chaos_replication.fbs";
+
+namespace ChaosEngine;
+
+// ---- RPC 消息 ----
+
+// RPC 调用
+table RpcCall {
+    method:      string;        // 方法名 (如 "cast_skill")
+    params:      [ubyte];       // 参数 (方法自定义 FlatBuffer)
+    reliability: uint8;         // 0 = unreliable (KCP), 1 = reliable (TCP)
+    call_id:     uint32;        // 调用 ID (用于可靠 RPC 的 ack)
+}
+
+// RPC 响应
+table RpcResponse {
+    call_id:     uint32;
+    result:      [ubyte];       // 返回值
+    error_code:  int32;         // 0 = 成功
+}
+
+// 合并消息: RPC + 属性同步 (同一消息包)
+table MergedMessage {
+    rpc:     RpcCall;                   // RPC 调用
+    repl:    ReplicationMessage;        // 属性同步 delta
+}
+
+// ---- 顶层消息包装 ----
+
+union MessagePayload {
+    RpcCall, RpcResponse,
+    ReplicationMessage,
+    EntityFullSync, EntityLeave,
+    MergedMessage
+}
+
+table Message {
+    msg_type:  uint8;           // 消息类型 (见 MessageType 枚举)
+    payload:   MessagePayload;
+}
+
+// ---- 消息类型枚举 ----
+
+enum MessageType : uint8 {
+    RPC_CALL              = 0,
+    RPC_RESPONSE          = 1,
+    REPLICATION           = 2,
+    ENTITY_FULL_SYNC      = 3,
+    ENTITY_LEAVE          = 4,
+    MERGED                = 5,
+}
