@@ -29,7 +29,7 @@ target_include_directories(test_ecs PRIVATE
     ${CMAKE_SOURCE_DIR}/src_c/public_api
     ${CMAKE_SOURCE_DIR}/src_c
 )
-target_link_libraries(test_ecs PRIVATE engine_core)
+target_link_libraries(test_ecs PRIVATE engine_core engine_sync)
 set_target_properties(test_ecs PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME ecs COMMAND test_ecs)
 

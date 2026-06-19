@@ -6,6 +6,7 @@
 #include "server/ce_aoi.h"
 #include "public_api/ce_log.h"
 #include "core/ce_memory.h"
+#include "replication/ce_replication.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +51,8 @@ static struct {
     CeAoiEventCallback event_callback;
     void*              event_user_data;
 
+    CeReplContext*     repl_ctx;       /* 复制管理器上下文 (NULL = 禁用) */
+
     CeBool             initialized;
 } g_aoi;
 
@@ -79,6 +82,20 @@ static void ensure_capacity(CeServerEntityId entity_id) {
 
 static void fire_event(CeAoiEventType type, CeServerEntityId subject,
                        CeServerEntityId object, float x, float y) {
+    /* 复制集成: ENTER 事件 → 标记进入实体所有组件为脏 */
+    if (g_aoi.repl_ctx) {
+        if (type == CE_AOI_ENTER) {
+            /* 当 object 进入 subject 的 AOI 范围时，
+             * 标记 object 的所有非 SERVER_ONLY 字段为脏，
+             * 触发完整同步给 subject 的客户端 */
+            ce_repl_mark_dirty(g_aoi.repl_ctx, object, CE_REPL_ALL_COMPONENTS);
+        } else if (type == CE_AOI_LEAVE) {
+            /* MVP: 记录离开事件，实际离开通知在后续 Phase 实现 */
+            CE_LOG_INFO("AOI", "entity %u left %u's AOI range (%.1f, %.1f)",
+                        object, subject, x, y);
+        }
+    }
+
     if (!g_aoi.event_callback) return;
     CeAoiEvent event = {type, subject, object, x, y};
     g_aoi.event_callback(&event, g_aoi.event_user_data);
@@ -500,4 +517,15 @@ void ce_aoi_debug_print(void) {
         if (cur) printf(" -> ");
     }
     printf("\n");
+}
+
+/* ---- 复制集成 ---- */
+
+void ce_aoi_set_replication_context(CeReplContext* ctx) {
+    g_aoi.repl_ctx = ctx;
+    if (ctx) {
+        CE_LOG_INFO("AOI", "replication context set (AOI events will trigger dirty marking)");
+    } else {
+        CE_LOG_INFO("AOI", "replication context cleared");
+    }
 }

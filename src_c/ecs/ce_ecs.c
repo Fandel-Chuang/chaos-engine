@@ -5,6 +5,8 @@
 
 #include "ecs/ce_ecs_internal.h"
 #include "core/ce_memory.h"
+#include "replication/ce_replication.h"
+#include "public_api/ce_log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -36,6 +38,15 @@ static struct {
     uint32_t     system_count;
     CeSystemInfo systems[64];          /* 最多 64 个系统 */
 } g_ecs;
+
+/* ---- 复制管理器上下文 (外部注入) ---- */
+
+static CeReplContext* g_repl_ctx = NULL;
+
+void ce_ecs_set_replication_context(CeReplContext* ctx) {
+    g_repl_ctx = ctx;
+    CE_LOG_INFO("ECS", "replication context %s", ctx ? "set" : "cleared");
+}
 
 /* ---- 初始化 ---- */
 
@@ -266,6 +277,8 @@ void* ce_entity_add_component(CeEntity entity, CeComponentId comp_id) {
                 /* 已存在，直接返回 */
                 CeComponentInfo* info = &g_ecs.components[comp_id];
                 uint8_t* data = (uint8_t*)old_arch->component_data[c];
+                /* 标记脏 (复制管线) */
+                if (g_repl_ctx) ce_repl_mark_dirty(g_repl_ctx, entity, comp_id);
                 return data + old_row * info->size;
             }
             new_ids[new_count++] = old_arch->component_ids[c];
@@ -326,6 +339,8 @@ void* ce_entity_add_component(CeEntity entity, CeComponentId comp_id) {
         if (new_ids[c] == comp_id) {
             CeComponentInfo* info = &g_ecs.components[comp_id];
             uint8_t* data = (uint8_t*)new_arch->component_data[c];
+            /* 标记脏 (复制管线) */
+            if (g_repl_ctx) ce_repl_mark_dirty(g_repl_ctx, entity, comp_id);
             return data + new_row * info->size;
         }
     }
@@ -454,6 +469,10 @@ CeResult ce_entity_edit_component(CeEntity entity, CeComponentId comp_id,
     if (!comp) return CE_ERR;
 
     edit_fn((void*)comp, user_data);
+
+    /* 标记脏 (复制管线) */
+    if (g_repl_ctx) ce_repl_mark_dirty(g_repl_ctx, entity, comp_id);
+
     return CE_OK;
 }
 

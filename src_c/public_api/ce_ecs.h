@@ -12,6 +12,11 @@
 extern "C" {
 #endif
 
+/* ---- 前向声明 ---- */
+
+/** 复制管理器上下文 (不透明) */
+typedef struct CeReplContext CeReplContext;
+
 /* ---- 实体 ---- */
 
 /** 实体句柄：高 32 位为 generation，低 32 位为 index */
@@ -101,6 +106,20 @@ uint32_t ce_ecs_get_entity_count(void);
 
 /** 获取组件类型注册数 */
 uint32_t ce_ecs_get_component_count(void);
+
+/* ---- 复制管线集成 ---- */
+
+/**
+ * 设置复制管理器上下文
+ *
+ * 设置后，所有 ECS 组件写入操作 (ce_entity_add_component,
+ * ce_entity_edit_component) 会自动标记脏实体，供复制管线帧末 flush。
+ *
+ * 传 NULL 可清除上下文 (headless 模式)。
+ *
+ * @param ctx  复制管理器上下文 (NULL 禁用自动脏标)
+ */
+void ce_ecs_set_replication_context(CeReplContext* ctx);
 
 #ifdef __cplusplus
 }

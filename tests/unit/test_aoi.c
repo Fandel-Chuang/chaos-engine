@@ -4,6 +4,7 @@
 
 #include "server/ce_aoi.h"
 #include "public_api/ce_types.h"
+#include "replication/ce_replication.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -156,6 +157,75 @@ static void test_count_nearby(void) {
     printf("PASS\n");
 }
 
+/* ---- 复制集成测试 ---- */
+
+static void test_aoi_replication_integration(void) {
+    printf("  test_aoi_replication_integration... ");
+
+    /* 1. 初始化复制管理器 */
+    CeReplConfig repl_config = {0};
+    repl_config.max_components = 8;
+    repl_config.max_fields_per_component = 16;
+    repl_config.max_dirty_entities = 64;
+    CeReplContext* repl_ctx = ce_repl_init(&repl_config);
+    assert(repl_ctx != NULL);
+
+    /* 2. 注册一个测试组件 (带 AOI_BROADCAST 标志) */
+    /* 定义一个简单的测试组件结构 */
+    typedef struct {
+        float x;
+        float y;
+        int32_t hp;
+    } TestTransform;
+
+    TestTransform default_transform = {0.0f, 0.0f, 100};
+
+    CeReplField transform_fields[] = {
+        {"x",  CE_REPL_TYPE_F32, CE_FLAG_AOI_BROADCAST, offsetof(TestTransform, x),  sizeof(float), {0}},
+        {"y",  CE_REPL_TYPE_F32, CE_FLAG_AOI_BROADCAST, offsetof(TestTransform, y),  sizeof(float), {0}},
+        {"hp", CE_REPL_TYPE_I32, CE_FLAG_AOI_BROADCAST, offsetof(TestTransform, hp), sizeof(int32_t), {0}},
+        {NULL, 0, 0, 0, 0, {0}}  /* 终止 */
+    };
+
+    CeResult reg_result = ce_repl_register_component(
+        repl_ctx, 1, "TestTransform", transform_fields, &default_transform);
+    assert(reg_result == CE_OK);
+
+    /* 3. 将复制上下文注入 AOI */
+    ce_aoi_init(50.0f, NULL, NULL);
+    ce_aoi_set_replication_context(repl_ctx);
+
+    /* 4. 添加实体 1 到 AOI */
+    assert(ce_aoi_enter(1, 0.0f, 0.0f, 1.0f) == CE_OK);
+
+    /* 5. 添加实体 2 到 AOI (在实体 1 的 AOI 范围内) */
+    /* 这会触发 CE_AOI_ENTER 事件，应标记实体 2 为脏 */
+    assert(ce_aoi_enter(2, 10.0f, 0.0f, 1.0f) == CE_OK);
+
+    /* 6. 验证实体 2 被标记为脏 */
+    CeReplStats stats;
+    ce_repl_get_stats(repl_ctx, &stats);
+    /* 脏实体计数应在 flush 前 > 0 */
+    assert(stats.current_dirty_entities > 0);
+
+    /* 7. 验证 flush 正常工作 */
+    ce_repl_flush(repl_ctx);
+    ce_repl_get_stats(repl_ctx, &stats);
+    assert(stats.total_flushes == 1);
+    assert(stats.total_entities_synced > 0);
+    assert(stats.current_dirty_entities == 0);
+
+    /* 8. 移动实体 2 到远处 (离开实体 1 的 AOI 范围) */
+    /* 这会触发 CE_AOI_LEAVE 事件 (仅记录日志) */
+    ce_aoi_move(2, 200.0f, 0.0f);
+
+    /* 9. 清理 */
+    ce_aoi_shutdown();
+    ce_repl_shutdown(repl_ctx);
+
+    printf("PASS\n");
+}
+
 int main(void) {
     printf("=== AOI Cross-Linked List Tests ===\n");
 
@@ -165,6 +235,7 @@ int main(void) {
     test_move_events();
     test_many_entities();
     test_count_nearby();
+    test_aoi_replication_integration();
 
     printf("\nAll AOI tests passed!\n");
     return 0;

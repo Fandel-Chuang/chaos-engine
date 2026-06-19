@@ -40,18 +40,18 @@ void ce_log_write(CeLogLevel level, const char* category,
                    const char* file, int line, const char* fmt, ...);
 
 /** 便捷宏 */
-#define CE_LOG_TRACE(cat, fmt, ...) \
-    ce_log_write(CE_LOG_TRACE, cat, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define CE_LOG_DEBUG(cat, fmt, ...) \
-    ce_log_write(CE_LOG_DEBUG, cat, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define CE_LOG_INFO(cat, fmt, ...)  \
-    ce_log_write(CE_LOG_INFO,  cat, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define CE_LOG_WARN(cat, fmt, ...)  \
-    ce_log_write(CE_LOG_WARN,  cat, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define CE_LOG_ERROR(cat, fmt, ...) \
-    ce_log_write(CE_LOG_ERROR, cat, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
-#define CE_LOG_FATAL(cat, fmt, ...) \
-    ce_log_write(CE_LOG_FATAL, cat, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#define CE_LOG_TRACE(cat, ...) \
+    ce_log_write(CE_LOG_TRACE, cat, __FILE__, __LINE__, __VA_ARGS__)
+#define CE_LOG_DEBUG(cat, ...) \
+    ce_log_write(CE_LOG_DEBUG, cat, __FILE__, __LINE__, __VA_ARGS__)
+#define CE_LOG_INFO(cat, ...)  \
+    ce_log_write(CE_LOG_INFO,  cat, __FILE__, __LINE__, __VA_ARGS__)
+#define CE_LOG_WARN(cat, ...)  \
+    ce_log_write(CE_LOG_WARN,  cat, __FILE__, __LINE__, __VA_ARGS__)
+#define CE_LOG_ERROR(cat, ...) \
+    ce_log_write(CE_LOG_ERROR, cat, __FILE__, __LINE__, __VA_ARGS__)
+#define CE_LOG_FATAL(cat, ...) \
+    ce_log_write(CE_LOG_FATAL, cat, __FILE__, __LINE__, __VA_ARGS__)
 
 /** 获取最近的日志条目（环形缓冲区，用于编辑器快照） */
 uint32_t ce_log_get_recent(CeLogEntry* out_buffer, uint32_t max_count);

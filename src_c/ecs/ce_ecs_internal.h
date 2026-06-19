@@ -41,6 +41,12 @@ typedef struct CeSystemInfo {
 
 /* ---- 内部 API ---- */
 
+/* 前向声明 (避免循环依赖) */
+typedef struct CeReplContext CeReplContext;
+
+/** 设置复制管理器上下文 (用于自动脏标) */
+void ce_ecs_set_replication_context(CeReplContext* ctx);
+
 CeResult ce_ecs_init(CeAllocator* allocator);
 void     ce_ecs_shutdown(void);
 void     ce_ecs_update_systems(float delta_time);

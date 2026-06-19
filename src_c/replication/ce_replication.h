@@ -29,6 +29,9 @@ typedef struct CeGatewayConn CeGatewayConn;
 /** DBProxy 同步上下文 (来自 ce_sync.h) */
 typedef struct CeSyncContext CeSyncContext;
 
+/** 同步帧 (来自 ce_sync.h, 前向声明以避免循环依赖) */
+struct CeSyncFrame;
+
 /** AOI 上下文 (来自 ce_aoi.h) */
 typedef struct CeAoiContext CeAoiContext;
 
@@ -41,6 +44,9 @@ typedef enum CeReplFlag {
     CE_FLAG_SERVER_ONLY    = 0x04,   /* 服务器专属，不同步客户端 */
     CE_FLAG_PERSIST        = 0x08,   /* 标记脏时同步到 DBProxy 存档 */
 } CeReplFlag;
+
+/** 特殊组件 ID: 标记实体的所有已注册组件为脏 */
+#define CE_REPL_ALL_COMPONENTS  ((uint32_t)-1)
 
 /* ---- 字段类型 ---- */
 
@@ -237,6 +243,18 @@ void ce_repl_set_gateway(CeReplContext* ctx, CeGatewayConn* gateway);
  * @param sync  DBProxy 同步上下文
  */
 void ce_repl_set_dbproxy(CeReplContext* ctx, CeSyncContext* sync);
+
+/**
+ * 设置 DBProxy 同步发送回调函数
+ *
+ * 用于打破 engine_core → engine_sync 的循环依赖。
+ * 在设置 sync 后调用此函数注册 ce_sync_send_frame 回调。
+ *
+ * @param ctx  复制管理器上下文
+ * @param fn   发送回调 (签名: CeResult fn(CeSyncContext*, const CeSyncFrame*))
+ */
+void ce_repl_set_sync_send_fn(CeReplContext* ctx,
+                               CeResult (*fn)(CeSyncContext*, const struct CeSyncFrame*));
 
 /**
  * 设置 AOI 上下文 (用于 AOI 范围内广播)

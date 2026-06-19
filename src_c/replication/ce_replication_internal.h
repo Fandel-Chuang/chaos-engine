@@ -90,6 +90,9 @@ struct CeReplContext {
     CeSyncContext*  sync;
     CeAoiContext*   aoi;
 
+    /* DBProxy 发送回调 (避免 engine_core → engine_sync 循环依赖) */
+    CeResult (*sync_send_fn)(CeSyncContext* ctx, const struct CeSyncFrame* frame);
+
     /* 统计 */
     CeReplStats     stats;
 

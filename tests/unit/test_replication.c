@@ -368,6 +368,152 @@ static void test_server_only_skip(void) {
     printf("  test_server_only_skip: PASS\n");
 }
 
+/* ---- 测试 10: PERSIST 字段过滤 (DBProxy 路径) ---- */
+
+static void test_persist_filtering(void) {
+    printf("  test_persist_filtering...\n");
+
+    CeReplContext* ctx = ce_repl_init(NULL);
+    assert(ctx != NULL);
+
+    /* 注册组件，包含多种 flag 组合的字段:
+     *   hp:     AOI_BROADCAST | PERSIST   → 客户端同步 + DBProxy
+     *   max_hp: AOI_BROADCAST | PERSIST   → 客户端同步 + DBProxy
+     *   mp:     OWNER_ONLY    | PERSIST   → 属主同步 + DBProxy
+     *   level:  AOI_BROADCAST             → 仅客户端同步 (无 PERSIST)
+     *   speed:  SERVER_ONLY               → 不同步
+     */
+    TestPlayerComponent default_player = {
+        .hp = 100, .max_hp = 100, .mp = 50, .level = 1, .speed = 5.0f
+    };
+
+    ce_repl_register_component(ctx, COMP_TEST_PLAYER, "TestPlayer",
+        (CeReplField[]){
+            {
+                .name       = "hp",
+                .type       = CE_REPL_TYPE_I32,
+                .flags      = CE_FLAG_AOI_BROADCAST | CE_FLAG_PERSIST,
+                .offset     = offsetof(TestPlayerComponent, hp),
+                .size       = sizeof(int32_t),
+                .constraint = {0},
+            },
+            {
+                .name       = "max_hp",
+                .type       = CE_REPL_TYPE_I32,
+                .flags      = CE_FLAG_AOI_BROADCAST | CE_FLAG_PERSIST,
+                .offset     = offsetof(TestPlayerComponent, max_hp),
+                .size       = sizeof(int32_t),
+                .constraint = {0},
+            },
+            {
+                .name       = "mp",
+                .type       = CE_REPL_TYPE_I32,
+                .flags      = CE_FLAG_OWNER_ONLY | CE_FLAG_PERSIST,
+                .offset     = offsetof(TestPlayerComponent, mp),
+                .size       = sizeof(int32_t),
+                .constraint = {0},
+            },
+            {
+                .name       = "level",
+                .type       = CE_REPL_TYPE_U8,
+                .flags      = CE_FLAG_AOI_BROADCAST,  /* 无 PERSIST */
+                .offset     = offsetof(TestPlayerComponent, level),
+                .size       = sizeof(uint8_t),
+                .constraint = {0},
+            },
+            {
+                .name       = "speed",
+                .type       = CE_REPL_TYPE_F32,
+                .flags      = CE_FLAG_SERVER_ONLY,  /* 不同步 */
+                .offset     = offsetof(TestPlayerComponent, speed),
+                .size       = sizeof(float),
+                .constraint = {0},
+            },
+            {0}
+        },
+        &default_player
+    );
+
+    /* 场景 1: sync 为 NULL (初始状态) — flush 应正常完成，不崩溃 */
+    /* ctx->sync 初始为 NULL，由 ce_repl_init 中的 calloc 保证 */
+
+    ce_repl_mark_dirty(ctx, 100ULL, COMP_TEST_PLAYER);
+
+    CeReplStats stats;
+    ce_repl_get_stats(ctx, &stats);
+    assert(stats.current_dirty_entities == 1);
+
+    ce_repl_flush(ctx);
+
+    /* 客户端同步统计: 4 个非 SERVER_ONLY 字段都应被计数
+     * (hp, max_hp, mp, level) — speed 是 SERVER_ONLY 跳过 */
+    ce_repl_get_stats(ctx, &stats);
+    assert(stats.total_fields_synced == 4);
+    assert(stats.total_entities_synced == 1);
+    assert(stats.total_flushes == 1);
+
+    /* 场景 2: 多实体脏标，验证 PERSIST 字段过滤不影响客户端同步 */
+    for (uint64_t eid = 200; eid <= 210; eid++) {
+        ce_repl_mark_dirty(ctx, eid, COMP_TEST_PLAYER);
+    }
+
+    ce_repl_get_stats(ctx, &stats);
+    assert(stats.current_dirty_entities == 11);
+
+    ce_repl_flush(ctx);
+
+    ce_repl_get_stats(ctx, &stats);
+    assert(stats.current_dirty_entities == 0);
+    /* 11 entities × 4 non-SERVER_ONLY fields = 44 */
+    assert(stats.total_fields_synced == 4 + 44);
+    assert(stats.total_entities_synced == 1 + 11);
+    assert(stats.total_flushes == 2);
+
+    /* 场景 3: 仅 PERSIST 字段 (无客户端同步 flag) */
+    CeReplContext* ctx2 = ce_repl_init(NULL);
+    assert(ctx2 != NULL);
+
+    ce_repl_register_component(ctx2, COMP_TEST_NPC, "TestNpc",
+        (CeReplField[]){
+            {
+                .name       = "hp",
+                .type       = CE_REPL_TYPE_I32,
+                .flags      = CE_FLAG_PERSIST,  /* 仅 PERSIST，无客户端同步 */
+                .offset     = offsetof(TestNpcComponent, hp),
+                .size       = sizeof(int32_t),
+                .constraint = {0},
+            },
+            {
+                .name       = "level",
+                .type       = CE_REPL_TYPE_U8,
+                .flags      = CE_FLAG_PERSIST,  /* 仅 PERSIST，无客户端同步 */
+                .offset     = offsetof(TestNpcComponent, level),
+                .size       = sizeof(uint8_t),
+                .constraint = {0},
+            },
+            {0}
+        },
+        &(TestNpcComponent){ .hp = 50, .level = 3 }
+    );
+
+    ce_repl_mark_dirty(ctx2, 500ULL, COMP_TEST_NPC);
+
+    ce_repl_get_stats(ctx2, &stats);
+    assert(stats.current_dirty_entities == 1);
+
+    ce_repl_flush(ctx2);
+
+    /* PERSIST-only 字段仍计入客户端同步统计 (当前 MVP 阶段) */
+    ce_repl_get_stats(ctx2, &stats);
+    assert(stats.total_fields_synced == 2);
+    assert(stats.total_entities_synced == 1);
+
+    ce_repl_shutdown(ctx2);
+
+    ce_repl_shutdown(ctx);
+    printf("  test_persist_filtering: PASS\n");
+}
+
 /* ---- 主函数 ---- */
 
 int main(void) {
@@ -382,6 +528,7 @@ int main(void) {
     test_owner_mapping();
     test_multi_entity_dirty();
     test_server_only_skip();
+    test_persist_filtering();
 
     printf("\n=== All tests passed! ===\n");
     return 0;

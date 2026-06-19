@@ -248,6 +248,25 @@ CeResult ce_repl_validate_initial_values(CeReplContext* ctx) {
 void ce_repl_mark_dirty(CeReplContext* ctx, uint64_t entity_id, uint32_t component_id) {
     if (!ctx) return;
 
+    CeReplDirtyEntry* entry = ce_repl_find_or_create_dirty(ctx, entity_id);
+    if (!entry) return;
+
+    if (component_id == CE_REPL_ALL_COMPONENTS) {
+        /* 标记所有已注册组件的所有字段为脏 */
+        for (uint32_t ci = 0; ci < ctx->component_count; ci++) {
+            const CeReplComponent* comp = &ctx->components[ci];
+            for (uint32_t fi = 0; fi < comp->field_count; fi++) {
+                uint32_t bit_idx = ci * CE_REPL_MAX_FIELDS_PER_COMP + fi;
+                uint32_t word = bit_idx / 64;
+                uint32_t bit  = bit_idx % 64;
+                if (word < 4) {
+                    entry->mask.bits[word] |= (1ULL << bit);
+                }
+            }
+        }
+        return;
+    }
+
     /* 查找组件 */
     int comp_idx = -1;
     for (uint32_t i = 0; i < ctx->component_count; i++) {
@@ -258,13 +277,10 @@ void ce_repl_mark_dirty(CeReplContext* ctx, uint64_t entity_id, uint32_t compone
     }
     if (comp_idx < 0) return;  /* 未注册的组件，忽略 */
 
-    CeReplDirtyEntry* entry = ce_repl_find_or_create_dirty(ctx, entity_id);
-    if (!entry) return;
-
     /* 标记该组件的所有字段为脏 */
     const CeReplComponent* comp = &ctx->components[comp_idx];
     for (uint32_t fi = 0; fi < comp->field_count; fi++) {
-        uint32_t bit_idx = comp_idx * CE_REPL_MAX_FIELDS_PER_COMP + fi;
+        uint32_t bit_idx = (uint32_t)comp_idx * CE_REPL_MAX_FIELDS_PER_COMP + fi;
         uint32_t word = bit_idx / 64;
         uint32_t bit  = bit_idx % 64;
         if (word < 4) {
@@ -303,6 +319,50 @@ void ce_repl_mark_field_dirty(CeReplContext* ctx, uint64_t entity_id,
 void ce_repl_tick(CeReplContext* ctx, float dt) {
     if (!ctx) return;
     (void)dt;  /* 预留: AOI 事件处理、超时检测等 */
+}
+
+/* ---- DBProxy PERSIST 字段过滤与发送 ---- */
+
+/**
+ * 收集所有标记了 CE_FLAG_PERSIST 的脏字段，
+ * 通过 sync_send_fn 回调发送到 DBProxy。
+ *
+ * 仅在 ctx->sync 非 NULL 且 sync_send_fn 已设置时执行。
+ * 当前 MVP: 统计并记录 PERSIST 字段，实际帧构建在后续 Phase 实现。
+ */
+static void ce_repl_flush_to_dbproxy(CeReplContext* ctx) {
+    if (!ctx->sync || !ctx->sync_send_fn) return;
+
+    /* 统计 PERSIST 字段数量 */
+    uint32_t persist_count = 0;
+
+    for (uint32_t di = 0; di < ctx->dirty_count; di++) {
+        CeReplDirtyEntry* entry = &ctx->dirty_entities[di];
+
+        for (uint32_t ci = 0; ci < ctx->component_count; ci++) {
+            const CeReplComponent* comp = &ctx->components[ci];
+
+            for (uint32_t fi = 0; fi < comp->field_count; fi++) {
+                uint32_t bit_idx = ci * CE_REPL_MAX_FIELDS_PER_COMP + fi;
+                uint32_t word = bit_idx / 64;
+                uint32_t bit  = bit_idx % 64;
+
+                if (word >= 4) continue;
+                if (!(entry->mask.bits[word] & (1ULL << bit))) continue;
+
+                const CeReplField* field = &comp->fields[fi];
+                if (field->flags & CE_FLAG_PERSIST) {
+                    persist_count++;
+                }
+            }
+        }
+    }
+
+    if (persist_count == 0) return;
+
+    /* MVP: 记录统计，实际帧构建和发送在后续 Phase 实现 */
+    CE_LOG_INFO("REPL", "DBProxy flush: %u persist fields across %u entities (MVP: frame send deferred)",
+                persist_count, ctx->dirty_count);
 }
 
 void ce_repl_flush(CeReplContext* ctx) {
@@ -354,6 +414,9 @@ void ce_repl_flush(CeReplContext* ctx) {
         }
     }
 
+    /* ---- DBProxy PERSIST 字段发送 ---- */
+    ce_repl_flush_to_dbproxy(ctx);
+
     /* 清除所有脏标 */
     memset(ctx->dirty_hash_keys, 0, sizeof(uint64_t) * ctx->dirty_hash_capacity);
     memset(ctx->dirty_hash_values, 0, sizeof(uint32_t) * ctx->dirty_hash_capacity);
@@ -380,6 +443,21 @@ void ce_repl_set_gateway(CeReplContext* ctx, CeGatewayConn* gateway) {
 void ce_repl_set_dbproxy(CeReplContext* ctx, CeSyncContext* sync) {
     if (!ctx) return;
     ctx->sync = sync;
+}
+
+/**
+ * 设置 DBProxy 同步发送回调函数
+ *
+ * 用于打破 engine_core → engine_sync 的循环依赖。
+ * 调用者 (如 engine_sync 初始化代码) 负责在设置 sync 后注册此回调。
+ *
+ * @param ctx  复制管理器上下文
+ * @param fn   发送回调 (签名: CeResult fn(CeSyncContext*, const CeSyncFrame*))
+ */
+void ce_repl_set_sync_send_fn(CeReplContext* ctx,
+                               CeResult (*fn)(CeSyncContext*, const struct CeSyncFrame*)) {
+    if (!ctx) return;
+    ctx->sync_send_fn = fn;
 }
 
 void ce_repl_set_aoi(CeReplContext* ctx, CeAoiContext* aoi) {

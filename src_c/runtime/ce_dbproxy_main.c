@@ -38,8 +38,9 @@ static int find_project_root(char* buf, size_t sz) {
     if (access(buf, R_OK) == 0) { snprintf(buf, sz, "%s", cwd); return 0; }
     char path[1024]; snprintf(path, sizeof(path), "%s", cwd);
     for (int i = 0; i < 5; i++) {
-        char* parent = dirname(path);
-        if (strcmp(parent, path) == 0 || strcmp(parent, "/") == 0) break;
+        char tmp[1024]; snprintf(tmp, sizeof(tmp), "%s", path);
+        char* parent = dirname(tmp);
+        if (strcmp(parent, "/") == 0) break;
         snprintf(path, sizeof(path), "%s", parent);
         char test[1024];
         snprintf(test, sizeof(test), "%s/%s", path, DBPROXY_SCRIPT);

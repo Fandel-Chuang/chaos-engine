@@ -16,6 +16,11 @@
 extern "C" {
 #endif
 
+/* ---- 前向声明 ---- */
+
+/** 复制管理器上下文 (来自 replication/ce_replication.h) */
+typedef struct CeReplContext CeReplContext;
+
 /* ---- 生命周期 ---- */
 
 /** 初始化 AOI 系统 */
@@ -50,6 +55,19 @@ int ce_aoi_entity_count(void);
 
 /** 打印 AOI 链表结构（调试用） */
 void ce_aoi_debug_print(void);
+
+/* ---- 复制集成 ---- */
+
+/**
+ * 设置复制管理器上下文
+ *
+ * 设置后，AOI 的 enter/leave 事件会自动触发复制脏标：
+ *   - ENTER: 标记进入实体的所有非 SERVER_ONLY 字段为脏
+ *   - LEAVE: 记录日志（实际离开通知在后续 Phase 实现）
+ *
+ * @param ctx  复制管理器上下文 (NULL 则禁用复制集成)
+ */
+void ce_aoi_set_replication_context(CeReplContext* ctx);
 
 #ifdef __cplusplus
 }

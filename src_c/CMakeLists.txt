@@ -62,8 +62,8 @@ target_include_directories(engine_core
 )
 
 target_compile_options(engine_core PRIVATE
-    $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration>
-    $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic>
+    $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration -Wno-gnu-zero-variadic-macro-arguments>
+    $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic -Wno-gnu-zero-variadic-macro-arguments>
     $<$<C_COMPILER_ID:MSVC>:/W4>
 )
 

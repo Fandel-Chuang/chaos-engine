@@ -7,6 +7,7 @@
 #include "public_api/ce_ecs.h"
 #include "ecs/ce_ecs_internal.h"
 #include "core/ce_memory.h"
+#include "replication/ce_replication.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -29,6 +30,13 @@ typedef struct {
     int hp;
     int max_hp;
 } Health;
+
+/* 复制脏标测试用的编辑回调 */
+static void health_edit_callback(void* component, void* user_data) {
+    (void)user_data;
+    Health* h = (Health*)component;
+    h->hp = 75;
+}
 
 int main(void) {
     printf("=== ECS Tests ===\n");
@@ -219,6 +227,59 @@ int main(void) {
 
         ce_entity_destroy(e2);
         CHECK(ce_ecs_get_entity_count() == before);
+    }
+    PASS();
+
+    /* ---- replication_dirty_marking ---- */
+    TEST("replication_dirty_marking");
+    {
+        /* 初始化复制管理器 */
+        CeReplContext* repl = ce_repl_init(NULL);
+        CHECK(repl != NULL);
+
+        /* 注册 Health 组件的可复制字段 */
+        CeReplField health_fields[] = {
+            { "hp",     CE_REPL_TYPE_I32, CE_FLAG_AOI_BROADCAST,
+              (uint32_t)__builtin_offsetof(Health, hp),     sizeof(int), {0} },
+            { "max_hp", CE_REPL_TYPE_I32, CE_FLAG_SERVER_ONLY,
+              (uint32_t)__builtin_offsetof(Health, max_hp), sizeof(int), {0} },
+            { NULL, 0, 0, 0, 0, {0} }  /* 终止标记 */
+        };
+        Health default_health = { 100, 100 };
+        CeResult reg_result = ce_repl_register_component(
+            repl, hp_id, "Health", health_fields, &default_health);
+        CHECK(reg_result == CE_OK);
+
+        /* 注入复制上下文到 ECS */
+        ce_ecs_set_replication_context(repl);
+
+        /* 创建实体并添加组件 (应自动标记脏) */
+        CeEntity e = ce_entity_create();
+        CHECK(ce_entity_is_alive(e) == CE_TRUE);
+
+        Health* hp = (Health*)ce_entity_add_component(e, hp_id);
+        CHECK(hp != NULL);
+        hp->hp = 50;
+        hp->max_hp = 100;
+
+        /* 修改组件 (通过 edit 接口，也应标记脏) */
+        ce_entity_edit_component(e, hp_id, health_edit_callback, NULL);
+
+        /* flush 复制管线 */
+        ce_repl_flush(repl);
+
+        /* 验证实体被同步 */
+        CeReplStats stats;
+        ce_repl_get_stats(repl, &stats);
+        CHECK(stats.total_entities_synced >= 1);
+        CHECK(stats.total_flushes == 1);
+
+        /* 清除上下文 (headless 模式) */
+        ce_ecs_set_replication_context(NULL);
+
+        /* 清理 */
+        ce_entity_destroy(e);
+        ce_repl_shutdown(repl);
     }
     PASS();
 

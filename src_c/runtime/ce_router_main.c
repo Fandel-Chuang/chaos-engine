@@ -78,8 +78,9 @@ static int find_project_root(char* buf, size_t buf_size) {
     char path[1024];
     snprintf(path, sizeof(path), "%s", cwd);
     for (int i = 0; i < 5; i++) {
-        char* parent = dirname(path);
-        if (strcmp(parent, path) == 0 || strcmp(parent, "/") == 0) {
+        char tmp[1024]; snprintf(tmp, sizeof(tmp), "%s", path);
+        char* parent = dirname(tmp);
+        if (strcmp(parent, "/") == 0) {
             break;  /* 到达根目录 */
         }
         snprintf(path, sizeof(path), "%s", parent);
