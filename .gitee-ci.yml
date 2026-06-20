@@ -11,41 +11,11 @@ on:
     branches: [master, develop]
 
 jobs:
-  # ── Job 1: 编译 + 全量测试 ──
+  # ── Job 1: 编译 + 全量测试 + 冒烟验证 ──
   build-and-test:
     name: 编译 & 测试 (Debug)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 安装依赖
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            cmake build-essential \
-            liblua5.4-dev liburing-dev libbpf-dev \
-            clang llvm
-
-      - name: CMake 配置
-        run: |
-          mkdir -p build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Debug
-
-      - name: 编译
-        run: cd build && make -j$(nproc)
-
-      - name: 全量测试
-        run: cd build && ctest --output-on-failure -j$(nproc)
-
-  # ── Job 2: 冒烟测试 + 客户端同步验证 ──
-  smoke-test:
-    name: 冒烟测试
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    needs: build-and-test
+    timeout-minutes: 20
 
     steps:
       - name: 检出代码
@@ -64,6 +34,17 @@ jobs:
           sudo luarocks install lapis
           sudo luarocks install lua-cjson
 
+      - name: CMake 配置
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Debug
+
+      - name: 编译
+        run: cd build && make -j$(nproc)
+
+      - name: 全量测试
+        run: cd build && ctest --output-on-failure -j$(nproc)
+
       - name: 冒烟测试 (含 Admin 后台)
         run: |
           chmod +x scripts/build_and_test.sh
@@ -76,7 +57,7 @@ jobs:
             env VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
             ./scripts/verify_client_sync.sh
 
-  # ── Job 3: Release 编译验证 ──
+  # ── Job 2: Release 编译验证 ──
   release-build:
     name: Release 编译
     runs-on: ubuntu-latest
@@ -100,7 +81,7 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc)
 
-  # ── Job 4: Lua 语法检查 ──
+  # ── Job 3: Lua 语法检查 ──
   lua-lint:
     name: Lua 语法检查
     runs-on: ubuntu-latest
@@ -130,7 +111,7 @@ jobs:
             exit 1
           fi
 
-  # ── Job 5: 内存检查 (Valgrind) ──
+  # ── Job 4: 内存检查 (Valgrind) ──
   memcheck:
     name: 内存检查 (Valgrind)
     runs-on: ubuntu-latest
