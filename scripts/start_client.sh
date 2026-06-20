@@ -20,7 +20,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-MODE="tcp"
+MODE="vulkan"
+CONNECT=""
+USE_XVFB=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -29,6 +31,7 @@ while [[ $# -gt 0 ]]; do
         --headless) MODE="headless"; shift ;;
         --vulkan)   MODE="vulkan"; shift ;;
         --stress)   MODE="stress"; CONNS="${2:-100}"; shift 2 ;;
+        --connect)  CONNECT="${2:-127.0.0.1:9000}"; shift 2 ;;
         --host)     GATEWAY_HOST="$2"; shift 2 ;;
         --port)     GAME_PORT="$2"; shift 2 ;;
         *)          echo "未知参数: $1"; exit 1 ;;
@@ -46,10 +49,50 @@ if [ ! -f "${BIN_DIR}/chaos_client" ]; then
     exit 1
 fi
 
+resolve_x_display() {
+    if [ -n "${DISPLAY:-}" ] && [ -n "${XAUTHORITY:-}" ] && [ -r "${XAUTHORITY}" ]; then
+        return 0
+    fi
+
+    local xline display auth
+    xline="$(pgrep -af '(^|/)(Xwayland|Xorg)( |$)' | head -n1 || true)"
+    if [ -n "$xline" ]; then
+        if [[ "$xline" =~ (:[0-9]+) ]]; then
+            display="${BASH_REMATCH[1]}"
+            export DISPLAY="$display"
+        fi
+        if [[ "$xline" =~ -auth[[:space:]]+([^[:space:]]+) ]]; then
+            auth="${BASH_REMATCH[1]}"
+            if [ -r "$auth" ]; then
+                export XAUTHORITY="$auth"
+            fi
+        fi
+    fi
+
+    if [ -z "${DISPLAY:-}" ] || [ -z "${XAUTHORITY:-}" ] || [ ! -r "${XAUTHORITY}" ]; then
+        echo -e "${RED}❌ Vulkan 模式需要可用的 X11/Wayland 显示和认证信息，但未检测到可用 DISPLAY/XAUTHORITY${NC}"
+        echo -e "${YELLOW}   请先设置 DISPLAY 和 XAUTHORITY，或显式使用 --headless${NC}"
+        exit 1
+    fi
+}
+
+case "$MODE" in
+    vulkan)
+        resolve_x_display
+        ;;
+    *)
+        :
+        ;;
+esac
+
 case "$MODE" in
     vulkan)
         echo -e "${BLUE}🚀 启动 Vulkan 渲染客户端...${NC}"
-        "${BIN_DIR}/chaos_client"
+        if [ -n "$CONNECT" ]; then
+            "${BIN_DIR}/chaos_client" --connect "$CONNECT"
+        else
+            "${BIN_DIR}/chaos_client"
+        fi
         ;;
 
     tcp)
