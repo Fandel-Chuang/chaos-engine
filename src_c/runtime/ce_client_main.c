@@ -16,6 +16,7 @@
 #include <string.h>
 #include <math.h>
 #include <signal.h>
+#include <time.h>
 
 static volatile int g_running = 1;
 
@@ -49,6 +50,7 @@ static void parse_args(int argc, char** argv, const char** host, int* port) {
 int main(int argc, char** argv) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+    srand((unsigned)time(NULL));
 
     /* 解析命令行参数 */
     parse_args(argc, argv, &g_gateway_host, &g_gateway_port);
@@ -117,6 +119,51 @@ int main(int argc, char** argv) {
         double dt = ce_frame_timer_tick(timer);
         frame_count = (unsigned long)ce_frame_timer_frame_count(timer);
 
+        /* 双通道输入：方向键 / WASD 都能驱动本地球体 */
+        static CeBool spawn_initialized = CE_FALSE;
+        static float local_x = 0.0f;
+        static float local_z = 0.0f;
+        const float move_speed = 6.0f * (float)dt;
+        const float spawn_radius = 10.0f * 0.25f;
+        if (!spawn_initialized) {
+            const float two_pi = 6.28318530717958647692f;
+            float angle = ((float)rand() / (float)RAND_MAX) * two_pi;
+            float dist = spawn_radius * sqrtf((float)rand() / (float)RAND_MAX);
+            local_x = cosf(angle) * dist;
+            local_z = sinf(angle) * dist;
+            printf("[Client] Spawn pos: (%.2f, %.2f, %.2f) within r=%.2f\n",
+                   local_x, 0.0f, local_z, spawn_radius);
+            spawn_initialized = CE_TRUE;
+        }
+        CeBool move_left  = ce_input_is_key_down(CE_KEY_LEFT) || ce_input_is_key_down(CE_KEY_A);
+        CeBool move_right = ce_input_is_key_down(CE_KEY_RIGHT) || ce_input_is_key_down(CE_KEY_D);
+        CeBool move_up    = ce_input_is_key_down(CE_KEY_UP) || ce_input_is_key_down(CE_KEY_W);
+        CeBool move_down  = ce_input_is_key_down(CE_KEY_DOWN) || ce_input_is_key_down(CE_KEY_S);
+        if (move_left)  local_x -= move_speed;
+        if (move_right) local_x += move_speed;
+        if (move_up)    local_z -= move_speed;
+        if (move_down)  local_z += move_speed;
+
+        char key_hint[16];
+        snprintf(key_hint, sizeof(key_hint), "%c%c%c%c",
+                 move_up ? 'W' : '-',
+                 move_down ? 'S' : '-',
+                 move_left ? 'A' : '-',
+                 move_right ? 'D' : '-');
+
+        char title[256];
+        if (net && ce_client_net_is_connected(net)) {
+            int ec = ce_client_net_entity_count(net);
+            snprintf(title, sizeof(title),
+                     "ChaosEngine Vulkan | pos=(%.2f, %.2f, %.2f) | visible=%d | keys=%s",
+                     local_x, 0.0f, local_z, ec, key_hint);
+        } else {
+            snprintf(title, sizeof(title),
+                     "ChaosEngine Vulkan | pos=(%.2f, %.2f, %.2f) | disconnected | keys=%s",
+                     local_x, 0.0f, local_z, key_hint);
+        }
+        rhi_set_window_title(rhi, title);
+
         /* ---- 网络更新 ---- */
         if (net && ce_client_net_is_connected(net)) {
             /* 轮询网络消息 */
@@ -127,30 +174,28 @@ int main(int argc, char** argv) {
 
             /* 每 10 帧发送一次位置更新 */
             if (frame_count % CE_CLIENT_POSITION_INTERVAL == 0) {
-                /* 发送一个简单的移动位置（让实体沿圆形轨迹移动） */
-                float t = (float)frame_count * 0.001f;
-                float x = 10.0f * (float)sin(t);
-                float z = 10.0f * (float)cos(t);
-                ce_client_net_send_position(net, x, 0.0f, z);
+                ce_client_net_send_position(net, local_x, 0.0f, local_z);
             }
 
             /* 打印可见实体信息（每 60 帧） */
             if (frame_count % 60 == 0) {
                 int ec = ce_client_net_entity_count(net);
-                if (ec > 0) {
-                    printf("\n[Client] Visible entities: %d\n", ec);
-                    for (int i = 0; i < ec && i < 5; i++) {
-                        const CeClientEntity* e = ce_client_net_get_entity(net, i);
-                        if (e) {
-                            printf("  Entity %u: (%.2f, %.2f, %.2f)\n",
-                                   e->entity_id, e->x, e->y, e->z);
-                        }
-                    }
-                    if (ec > 5) {
-                        printf("  ... and %d more\n", ec - 5);
+                printf("\n[Client] Local pos: (%.2f, %.2f, %.2f), visible=%d\n",
+                       local_x, 0.0f, local_z, ec);
+                for (int i = 0; i < ec && i < 5; i++) {
+                    const CeClientEntity* e = ce_client_net_get_entity(net, i);
+                    if (e) {
+                        printf("  Entity %u: (%.2f, %.2f, %.2f)\n",
+                               e->entity_id, e->x, e->y, e->z);
                     }
                 }
+                if (ec > 5) {
+                    printf("  ... and %d more\n", ec - 5);
+                }
             }
+        } else if (frame_count % 60 == 0) {
+            printf("\n[Client] Local pos: (%.2f, %.2f, %.2f), network disconnected\n",
+                   local_x, 0.0f, local_z);
         }
 
         /* 引擎更新 */
@@ -160,9 +205,14 @@ int main(int argc, char** argv) {
         rhi_begin_frame(rhi, ce_color_rgba(0.1f, 0.1f, 0.15f, 1.0f));
         if (net && ce_client_net_is_connected(net)) {
             int ec = ce_client_net_entity_count(net);
+            int rendered_self = 0;
             for (int i = 0; i < ec; i++) {
                 const CeClientEntity* e = ce_client_net_get_entity(net, i);
                 if (!e) continue;
+
+                if (e->entity_id == net->entity_id) {
+                    rendered_self = 1;
+                }
 
                 /* 将世界坐标压缩到相机前方的可见范围 */
                 CeVec3 pos = {
@@ -183,7 +233,36 @@ int main(int argc, char** argv) {
                 rhi_set_uniform_mat4(rhi, "mvp", &mvp);
                 rhi_draw(rhi, 0, 0);
             }
+
+            /* 如果服务端还没回传自己的实体，就先画本地预测球 */
+            if (ec == 0 || !rendered_self) {
+                CeVec3 pos = {local_x * 0.05f, 0.0f, local_z * 0.05f};
+                CeMat4 proj = ce_mat4_perspective(ce_radians(45.0f),
+                                                  1280.0f / 720.0f,
+                                                  0.1f, 100.0f);
+                CeMat4 view = ce_mat4_look_at(
+                    (CeVec3){0.0f, 0.0f, 3.0f},
+                    (CeVec3){0.0f, 0.0f, 0.0f},
+                    (CeVec3){0.0f, 1.0f, 0.0f}
+                );
+                CeMat4 model = ce_mat4_translation(pos);
+                CeMat4 mvp = ce_mat4_mul(proj, ce_mat4_mul(view, model));
+                rhi_set_uniform_mat4(rhi, "mvp", &mvp);
+                rhi_draw(rhi, 0, 0);
+            }
         } else {
+            CeVec3 pos = {local_x * 0.05f, 0.0f, local_z * 0.05f};
+            CeMat4 proj = ce_mat4_perspective(ce_radians(45.0f),
+                                              1280.0f / 720.0f,
+                                              0.1f, 100.0f);
+            CeMat4 view = ce_mat4_look_at(
+                (CeVec3){0.0f, 0.0f, 3.0f},
+                (CeVec3){0.0f, 0.0f, 0.0f},
+                (CeVec3){0.0f, 1.0f, 0.0f}
+            );
+            CeMat4 model = ce_mat4_translation(pos);
+            CeMat4 mvp = ce_mat4_mul(proj, ce_mat4_mul(view, model));
+            rhi_set_uniform_mat4(rhi, "mvp", &mvp);
             rhi_draw(rhi, 0, 0);
         }
         rhi_end_frame(rhi);

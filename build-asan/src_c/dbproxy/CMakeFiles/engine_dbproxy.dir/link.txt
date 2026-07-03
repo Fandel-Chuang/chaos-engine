@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/libengine_dbproxy.a CMakeFiles/engine_dbproxy.dir/ce_dbproxy.c.o
+/usr/bin/ranlib ../../lib/libengine_dbproxy.a

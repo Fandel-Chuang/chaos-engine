@@ -85,6 +85,7 @@ void         rhi_destroy_device(CeRhiDevice* device);
 void         rhi_resize(CeRhiDevice* device, int width, int height);
 CeBool       rhi_should_close(CeRhiDevice* device);
 void         rhi_poll_events(CeRhiDevice* device);
+void         rhi_set_window_title(CeRhiDevice* device, const char* title);
 
 /* ---- 资源 ---- */
 

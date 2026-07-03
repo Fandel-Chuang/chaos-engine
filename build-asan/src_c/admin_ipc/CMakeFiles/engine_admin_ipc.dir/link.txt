@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/libengine_admin_ipc.a CMakeFiles/engine_admin_ipc.dir/ce_admin_ipc.c.o
+/usr/bin/ranlib ../../lib/libengine_admin_ipc.a

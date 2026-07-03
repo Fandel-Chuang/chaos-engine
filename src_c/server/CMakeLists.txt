@@ -6,6 +6,7 @@
 add_library(engine_server STATIC
     ce_aoi.c
     ce_cell.c
+    ce_game_session.c
 )
 
 target_include_directories(engine_server PRIVATE

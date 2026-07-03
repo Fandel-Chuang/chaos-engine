@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/libengine_sync.a CMakeFiles/engine_sync.dir/ce_sync.c.o
+/usr/bin/ranlib ../../lib/libengine_sync.a

@@ -13,92 +13,93 @@
 
 #define VK_USE_PLATFORM_XLIB_KHR
 #include "render/ce_rhi_vulkan.h"
+#include "render/shaders/sphere_shaders.h"
 #include "core/ce_memory.h"
 #include "core/ce_platform.h"
+#include "core/ce_math.h"
+#include "core/ce_time.h"
 #include "log/ce_log_internal.h"
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/keysym.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 /* ---- 常量 ---- */
 
 #define CE_VK_MAX_FRAMES_IN_FLIGHT 2
 #define CE_VK_MAX_DESCRIPTOR_SETS  64
 
-/* ---- 顶点着色器 (SPIR-V, 三角形, glslc 编译) ---- */
+/* ---- 顶点着色器 (SPIR-V, 球体, glslc 编译) ---- */
 static const uint32_t g_vert_shader_spv[] = {
-    0x07230203, 0x00010000, 0x000D000B, 0x00000036, 0x00000000, 0x00020011, 0x00000001, 0x0006000B,
-    0x00000001, 0x4C534C47, 0x6474732E, 0x3035342E, 0x00000000, 0x0003000E, 0x00000000, 0x00000001,
-    0x0008000F, 0x00000000, 0x00000004, 0x6E69616D, 0x00000000, 0x00000022, 0x00000026, 0x00000031,
-    0x00030003, 0x00000002, 0x000001C2, 0x000A0004, 0x475F4C47, 0x4C474F4F, 0x70635F45, 0x74735F70,
-    0x5F656C79, 0x656E696C, 0x7269645F, 0x69746365, 0x00006576, 0x00080004, 0x475F4C47, 0x4C474F4F,
-    0x6E695F45, 0x64756C63, 0x69645F65, 0x74636572, 0x00657669, 0x00040005, 0x00000004, 0x6E69616D,
-    0x00000000, 0x00050005, 0x0000000C, 0x69736F70, 0x6E6F6974, 0x00000073, 0x00040005, 0x00000017,
-    0x6F6C6F63, 0x00007372, 0x00060005, 0x00000020, 0x505F6C67, 0x65567265, 0x78657472, 0x00000000,
-    0x00060006, 0x00000020, 0x00000000, 0x505F6C67, 0x7469736F, 0x006E6F69, 0x00070006, 0x00000020,
-    0x00000001, 0x505F6C67, 0x746E696F, 0x657A6953, 0x00000000, 0x00070006, 0x00000020, 0x00000002,
-    0x435F6C67, 0x4470696C, 0x61747369, 0x0065636E, 0x00070006, 0x00000020, 0x00000003, 0x435F6C67,
-    0x446C6C75, 0x61747369, 0x0065636E, 0x00030005, 0x00000022, 0x00000000, 0x00060005, 0x00000026,
-    0x565F6C67, 0x65747265, 0x646E4978, 0x00007865, 0x00050005, 0x00000031, 0x67617266, 0x6F6C6F43,
-    0x00000072, 0x00030047, 0x00000020, 0x00000002, 0x00050048, 0x00000020, 0x00000000, 0x0000000B,
-    0x00000000, 0x00050048, 0x00000020, 0x00000001, 0x0000000B, 0x00000001, 0x00050048, 0x00000020,
-    0x00000002, 0x0000000B, 0x00000003, 0x00050048, 0x00000020, 0x00000003, 0x0000000B, 0x00000004,
-    0x00040047, 0x00000026, 0x0000000B, 0x0000002A, 0x00040047, 0x00000031, 0x0000001E, 0x00000000,
-    0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020,
-    0x00040017, 0x00000007, 0x00000006, 0x00000002, 0x00040015, 0x00000008, 0x00000020, 0x00000000,
-    0x0004002B, 0x00000008, 0x00000009, 0x00000003, 0x0004001C, 0x0000000A, 0x00000007, 0x00000009,
-    0x00040020, 0x0000000B, 0x00000006, 0x0000000A, 0x0004003B, 0x0000000B, 0x0000000C, 0x00000006,
-    0x0004002B, 0x00000006, 0x0000000D, 0x00000000, 0x0004002B, 0x00000006, 0x0000000E, 0xBF000000,
-    0x0005002C, 0x00000007, 0x0000000F, 0x0000000D, 0x0000000E, 0x0004002B, 0x00000006, 0x00000010,
-    0x3F000000, 0x0005002C, 0x00000007, 0x00000011, 0x00000010, 0x00000010, 0x0005002C, 0x00000007,
-    0x00000012, 0x0000000E, 0x00000010, 0x0006002C, 0x0000000A, 0x00000013, 0x0000000F, 0x00000011,
-    0x00000012, 0x00040017, 0x00000014, 0x00000006, 0x00000003, 0x0004001C, 0x00000015, 0x00000014,
-    0x00000009, 0x00040020, 0x00000016, 0x00000006, 0x00000015, 0x0004003B, 0x00000016, 0x00000017,
-    0x00000006, 0x0004002B, 0x00000006, 0x00000018, 0x3F800000, 0x0006002C, 0x00000014, 0x00000019,
-    0x00000018, 0x0000000D, 0x0000000D, 0x0006002C, 0x00000014, 0x0000001A, 0x0000000D, 0x00000018,
-    0x0000000D, 0x0006002C, 0x00000014, 0x0000001B, 0x0000000D, 0x0000000D, 0x00000018, 0x0006002C,
-    0x00000015, 0x0000001C, 0x00000019, 0x0000001A, 0x0000001B, 0x00040017, 0x0000001D, 0x00000006,
-    0x00000004, 0x0004002B, 0x00000008, 0x0000001E, 0x00000001, 0x0004001C, 0x0000001F, 0x00000006,
-    0x0000001E, 0x0006001E, 0x00000020, 0x0000001D, 0x00000006, 0x0000001F, 0x0000001F, 0x00040020,
-    0x00000021, 0x00000003, 0x00000020, 0x0004003B, 0x00000021, 0x00000022, 0x00000003, 0x00040015,
-    0x00000023, 0x00000020, 0x00000001, 0x0004002B, 0x00000023, 0x00000024, 0x00000000, 0x00040020,
-    0x00000025, 0x00000001, 0x00000023, 0x0004003B, 0x00000025, 0x00000026, 0x00000001, 0x00040020,
-    0x00000028, 0x00000006, 0x00000007, 0x00040020, 0x0000002E, 0x00000003, 0x0000001D, 0x00040020,
-    0x00000030, 0x00000003, 0x00000014, 0x0004003B, 0x00000030, 0x00000031, 0x00000003, 0x00040020,
-    0x00000033, 0x00000006, 0x00000014, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
-    0x000200F8, 0x00000005, 0x0003003E, 0x0000000C, 0x00000013, 0x0003003E, 0x00000017, 0x0000001C,
-    0x0004003D, 0x00000023, 0x00000027, 0x00000026, 0x00050041, 0x00000028, 0x00000029, 0x0000000C,
-    0x00000027, 0x0004003D, 0x00000007, 0x0000002A, 0x00000029, 0x00050051, 0x00000006, 0x0000002B,
-    0x0000002A, 0x00000000, 0x00050051, 0x00000006, 0x0000002C, 0x0000002A, 0x00000001, 0x00070050,
-    0x0000001D, 0x0000002D, 0x0000002B, 0x0000002C, 0x0000000D, 0x00000018, 0x00050041, 0x0000002E,
-    0x0000002F, 0x00000022, 0x00000024, 0x0003003E, 0x0000002F, 0x0000002D, 0x0004003D, 0x00000023,
-    0x00000032, 0x00000026, 0x00050041, 0x00000033, 0x00000034, 0x00000017, 0x00000032, 0x0004003D,
-    0x00000014, 0x00000035, 0x00000034, 0x0003003E, 0x00000031, 0x00000035, 0x000100FD, 0x00010038
+    0x07230203, 0x00010000, 0x000D000B, 0x00000027, 0x00000000, 0x00020011,
+    0x00000001, 0x0006000B, 0x00000001, 0x4C534C47, 0x6474732E, 0x3035342E,
+    0x00000000, 0x0003000E, 0x00000000, 0x00000001, 0x0009000F, 0x00000000,
+    0x00000004, 0x6E69616D, 0x00000000, 0x0000000D, 0x00000019, 0x00000024,
+    0x00000025, 0x00030003, 0x00000002, 0x000001C2, 0x00070004, 0x0000000B,
+    0x00000002, 0x00000000, 0x0000000B, 0x00000000, 0x00000000, 0x00050004,
+    0x0000000B, 0x00000001, 0x0000000B, 0x00000001, 0x00050004, 0x0000000B,
+    0x00000002, 0x0000000B, 0x00000003, 0x00050004, 0x0000000B, 0x00000003,
+    0x0000000B, 0x00000004, 0x00030004, 0x00000011, 0x00000002, 0x00040004,
+    0x00000011, 0x00000000, 0x00000005, 0x00050004, 0x00000011, 0x00000000,
+    0x00000007, 0x00000010, 0x00050004, 0x00000011, 0x00000000, 0x00000023,
+    0x00000000, 0x00040047, 0x00000019, 0x0000001E, 0x00000000, 0x00040047,
+    0x00000024, 0x0000001E, 0x00000000, 0x00040047, 0x00000025, 0x0000001E,
+    0x00000001, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
+    0x00000004, 0x00040015, 0x00000008, 0x00000020, 0x00000000, 0x0004002B,
+    0x00000008, 0x00000009, 0x00000001, 0x0004001C, 0x0000000A, 0x00000006,
+    0x00000009, 0x0006001E, 0x0000000B, 0x00000007, 0x00000006, 0x0000000A,
+    0x0000000A, 0x00040020, 0x0000000C, 0x00000003, 0x0000000B, 0x0004003B,
+    0x0000000C, 0x0000000D, 0x00000003, 0x00040015, 0x0000000E, 0x00000020,
+    0x00000001, 0x0004002B, 0x0000000E, 0x0000000F, 0x00000000, 0x00040018,
+    0x00000010, 0x00000007, 0x00000004, 0x0003001E, 0x00000011, 0x00000010,
+    0x00040020, 0x00000012, 0x00000009, 0x00000011, 0x0004003B, 0x00000012,
+    0x00000013, 0x00000009, 0x00040020, 0x00000014, 0x00000009, 0x00000010,
+    0x00040017, 0x00000017, 0x00000006, 0x00000003, 0x00040020, 0x00000018,
+    0x00000001, 0x00000017, 0x0004003B, 0x00000018, 0x00000019, 0x00000001,
+    0x0004002B, 0x00000006, 0x0000001B, 0x3F800000, 0x00040020, 0x00000021,
+    0x00000003, 0x00000007, 0x00040020, 0x00000023, 0x00000003, 0x00000017,
+    0x0004003B, 0x00000023, 0x00000024, 0x00000003, 0x0004003B, 0x00000018,
+    0x00000025, 0x00000001, 0x00050036, 0x00000002, 0x00000004, 0x00000000,
+    0x00000003, 0x000200F8, 0x00000005, 0x0004003D, 0x00000017, 0x0000001A,
+    0x00000019, 0x00050051, 0x00000006, 0x0000001C, 0x0000001A, 0x00000000,
+    0x00050051, 0x00000006, 0x0000001D, 0x0000001A, 0x00000001, 0x00050051,
+    0x00000006, 0x0000001E, 0x0000001A, 0x00000002, 0x00070050, 0x00000007,
+    0x0000001F, 0x0000001C, 0x0000001D, 0x0000001E, 0x0000001B, 0x0004003D,
+    0x00000010, 0x00000016, 0x00000013, 0x00050091, 0x00000007, 0x00000020,
+    0x00000016, 0x0000001F, 0x0004003D, 0x00000007, 0x00000022, 0x00000020,
+    0x00050041, 0x00000021, 0x00000022, 0x0000000D, 0x0000000F, 0x0003003E,
+    0x00000022, 0x00000020, 0x0004003D, 0x00000017, 0x00000026, 0x00000025,
+    0x0003003E, 0x00000024, 0x00000026, 0x000100FD, 0x00010038,
 };
+static const uint32_t g_vert_shader_spv_len = 952;
 
 /* ---- 片元着色器 (SPIR-V, glslc 编译) ---- */
 static const uint32_t g_frag_shader_spv[] = {
-    0x07230203, 0x00010000, 0x000D000B, 0x00000013, 0x00000000, 0x00020011, 0x00000001, 0x0006000B,
-    0x00000001, 0x4C534C47, 0x6474732E, 0x3035342E, 0x00000000, 0x0003000E, 0x00000000, 0x00000001,
-    0x0007000F, 0x00000004, 0x00000004, 0x6E69616D, 0x00000000, 0x00000009, 0x0000000C, 0x00030010,
-    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001C2, 0x000A0004, 0x475F4C47, 0x4C474F4F,
-    0x70635F45, 0x74735F70, 0x5F656C79, 0x656E696C, 0x7269645F, 0x69746365, 0x00006576, 0x00080004,
-    0x475F4C47, 0x4C474F4F, 0x6E695F45, 0x64756C63, 0x69645F65, 0x74636572, 0x00657669, 0x00040005,
-    0x00000004, 0x6E69616D, 0x00000000, 0x00050005, 0x00000009, 0x4374756F, 0x726F6C6F, 0x00000000,
-    0x00050005, 0x0000000C, 0x67617266, 0x6F6C6F43, 0x00000072, 0x00040047, 0x00000009, 0x0000001E,
-    0x00000000, 0x00040047, 0x0000000C, 0x0000001E, 0x00000000, 0x00020013, 0x00000002, 0x00030021,
-    0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
-    0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003B, 0x00000008, 0x00000009,
-    0x00000003, 0x00040017, 0x0000000A, 0x00000006, 0x00000003, 0x00040020, 0x0000000B, 0x00000001,
-    0x0000000A, 0x0004003B, 0x0000000B, 0x0000000C, 0x00000001, 0x0004002B, 0x00000006, 0x0000000E,
-    0x3F800000, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200F8, 0x00000005,
-    0x0004003D, 0x0000000A, 0x0000000D, 0x0000000C, 0x00050051, 0x00000006, 0x0000000F, 0x0000000D,
-    0x00000000, 0x00050051, 0x00000006, 0x00000010, 0x0000000D, 0x00000001, 0x00050051, 0x00000006,
-    0x00000011, 0x0000000D, 0x00000002, 0x00070050, 0x00000007, 0x00000012, 0x0000000F, 0x00000010,
-    0x00000011, 0x0000000E, 0x0003003E, 0x00000009, 0x00000012, 0x000100FD, 0x00010038
+    0x07230203, 0x00010000, 0x000D000B, 0x00000013, 0x00000000, 0x00020011,
+    0x00000001, 0x0006000B, 0x00000001, 0x4C534C47, 0x6474732E, 0x3035342E,
+    0x00000000, 0x0003000E, 0x00000000, 0x00000001, 0x0007000F, 0x00000004,
+    0x00000004, 0x6E69616D, 0x00000000, 0x00000009, 0x0000000C, 0x00030010,
+    0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001C2, 0x00040047,
+    0x00000009, 0x0000001E, 0x00000000, 0x00040047, 0x0000000C, 0x0000001E,
+    0x00000000, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002,
+    0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007, 0x00000006,
+    0x00000004, 0x00040020, 0x00000008, 0x00000003, 0x00000007, 0x0004003B,
+    0x00000008, 0x00000009, 0x00000003, 0x00040017, 0x0000000A, 0x00000006,
+    0x00000003, 0x00040020, 0x0000000B, 0x00000001, 0x0000000A, 0x0004003B,
+    0x0000000B, 0x0000000C, 0x00000001, 0x0004002B, 0x00000006, 0x0000000E,
+    0x3F800000, 0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003,
+    0x000200F8, 0x00000005, 0x0004003D, 0x0000000A, 0x0000000D, 0x0000000C,
+    0x00050051, 0x00000006, 0x0000000F, 0x0000000D, 0x00000000, 0x00050051,
+    0x00000006, 0x00000010, 0x0000000D, 0x00000001, 0x00050051, 0x00000006,
+    0x00000011, 0x0000000D, 0x00000002, 0x00070050, 0x00000007, 0x00000012,
+    0x0000000F, 0x00000010, 0x00000011, 0x0000000E, 0x0003003E, 0x00000009,
+    0x00000012, 0x000100FD, 0x00010038,
 };
+static const uint32_t g_frag_shader_spv_len = 432;
 
 /* 内部结构体定义已移至 ce_rhi_vulkan.h */
 
@@ -166,6 +167,71 @@ VkShaderModule rhi_vk_create_shader_module(CeRhiDeviceVk* dev,
     return module;
 }
 
+/* ---- 球体网格生成 ---- */
+/* 生成 UV 球体，顶点格式: [pos_x, pos_y, pos_z, color_r, color_g, color_b] */
+static void ce_rhi_gen_sphere(float radius, int sectors, int stacks,
+                               float** out_vertices, uint32_t* out_vertex_count,
+                               uint32_t** out_indices, uint32_t* out_index_count)
+{
+    int num_vertices = (sectors + 1) * (stacks + 1);
+    int num_indices  = sectors * stacks * 6;
+
+    *out_vertices = (float*)malloc(num_vertices * 6 * sizeof(float));
+    *out_indices  = (uint32_t*)malloc(num_indices * sizeof(uint32_t));
+    *out_vertex_count = (uint32_t)num_vertices;
+    *out_index_count  = (uint32_t)num_indices;
+
+    float* vptr = *out_vertices;
+    uint32_t* iptr = *out_indices;
+    float base_r = 0.35f + 0.65f * ((float)rand() / (float)RAND_MAX);
+    float base_g = 0.35f + 0.65f * ((float)rand() / (float)RAND_MAX);
+    float base_b = 0.35f + 0.65f * ((float)rand() / (float)RAND_MAX);
+
+    for (int stack = 0; stack <= stacks; stack++) {
+        float phi = (float)M_PI * (float)stack / (float)stacks;
+        float sin_phi = sinf(phi);
+        float cos_phi = cosf(phi);
+
+        for (int sector = 0; sector <= sectors; sector++) {
+            float theta = 2.0f * (float)M_PI * (float)sector / (float)sectors;
+            float sin_theta = sinf(theta);
+            float cos_theta = cosf(theta);
+
+            /* 位置 = 法线方向 * 半径 */
+            float nx = sin_phi * cos_theta;
+            float ny = cos_phi;
+            float nz = sin_phi * sin_theta;
+
+            vptr[0] = nx * radius;
+            vptr[1] = ny * radius;
+            vptr[2] = nz * radius;
+
+            /* 出生球颜色：每次启动随机一组基础色 */
+            vptr[3] = base_r * (0.45f + 0.55f * fabsf(nx));
+            vptr[4] = base_g * (0.45f + 0.55f * fabsf(ny));
+            vptr[5] = base_b * (0.45f + 0.55f * fabsf(nz));
+
+            vptr += 6;
+        }
+    }
+
+    int index = 0;
+    for (int stack = 0; stack < stacks; stack++) {
+        for (int sector = 0; sector < sectors; sector++) {
+            int first  = (stack) * (sectors + 1) + sector;
+            int second = first + sectors + 1;
+
+            iptr[index++] = (uint32_t)first;
+            iptr[index++] = (uint32_t)second;
+            iptr[index++] = (uint32_t)(first + 1);
+
+            iptr[index++] = (uint32_t)(first + 1);
+            iptr[index++] = (uint32_t)second;
+            iptr[index++] = (uint32_t)(second + 1);
+        }
+    }
+}
+
 /* ---- 前向声明 ---- */
 static VkResult create_swapchain(CeRhiDevice* dev);
 static VkResult create_render_pass(CeRhiDevice* dev);
@@ -196,9 +262,9 @@ CeRhiDevice* rhi_create_device(const CeRhiConfig* config) {
         VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
     };
 
-    const char* layers[] = {
-        /* "VK_LAYER_KHRONOS_validation", -- disabled for NVIDIA compat */
-    };
+    /* Validation layer disabled for performance; array kept for future use */
+    const char* layers[1];
+    layers[0] = NULL;
 
     VkInstanceCreateInfo instance_info = {0};
     instance_info.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -239,18 +305,30 @@ CeRhiDevice* rhi_create_device(const CeRhiConfig* config) {
         WhitePixel(dev->x11_display, screen)
     );
 
+    /* 先把 X11 兜底背景设成深色，避免 Vulkan 首帧没提交时出现白底闪屏 */
+    XSetWindowBackground(dev->x11_display, dev->x11_window, BlackPixel(dev->x11_display, screen));
+
     XStoreName(dev->x11_display, dev->x11_window,
                config->title ? config->title : "ChaosEngine");
     XSelectInput(dev->x11_display, dev->x11_window,
                  ExposureMask | KeyPressMask | KeyReleaseMask |
                  ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                 StructureNotifyMask);
+                 FocusChangeMask | StructureNotifyMask);
 
     /* 设置关闭协议 */
     Atom wm_delete = XInternAtom(dev->x11_display, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(dev->x11_display, dev->x11_window, &wm_delete, 1);
 
     XMapWindow(dev->x11_display, dev->x11_window);
+    XRaiseWindow(dev->x11_display, dev->x11_window);
+    XWMHints* wm_hints = XAllocWMHints();
+    if (wm_hints) {
+        wm_hints->flags = InputHint;
+        wm_hints->input = True;
+        XSetWMHints(dev->x11_display, dev->x11_window, wm_hints);
+        XFree(wm_hints);
+    }
+    XClearWindow(dev->x11_display, dev->x11_window);
     XFlush(dev->x11_display);
 
     /* 1.6. 创建 Vulkan Surface */
@@ -363,16 +441,75 @@ CeRhiDevice* rhi_create_device(const CeRhiConfig* config) {
     vkCreateCommandPool(dev->device, &pool_info, NULL, &dev->command_pool);
 
     /* 6. 创建交换链和渲染资源 */
-    create_swapchain(dev);
-    create_render_pass(dev);
-    create_framebuffers(dev);
-    create_sync_objects(dev);
-    create_command_buffers(dev);
-    if (create_graphics_pipeline(dev) != VK_SUCCESS) {
-        fprintf(stderr, "VULKAN ERROR: Failed to create graphics pipeline\n");
+    if (create_swapchain(dev) != VK_SUCCESS ||
+        create_render_pass(dev) != VK_SUCCESS ||
+        create_framebuffers(dev) != VK_SUCCESS ||
+        create_sync_objects(dev) != VK_SUCCESS ||
+        create_command_buffers(dev) != VK_SUCCESS ||
+        create_graphics_pipeline(dev) != VK_SUCCESS) {
+        fprintf(stderr, "VULKAN ERROR: Failed to create rendering resources\n");
         rhi_destroy_device(dev);
         return NULL;
     }
+
+    /* 创建球体网格 */
+    float* verts;
+    uint32_t* idxs;
+    uint32_t vcount, icount;
+    ce_rhi_gen_sphere(0.8f, 32, 24, &verts, &vcount, &idxs, &icount);
+
+    /* 创建顶点缓冲 */
+    VkBufferCreateInfo vb_info = {0};
+    vb_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    vb_info.size  = vcount * 6 * sizeof(float);
+    vb_info.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    vb_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(dev->device, &vb_info, NULL, &dev->sphere_vb);
+
+    VkMemoryRequirements vb_mem_reqs;
+    vkGetBufferMemoryRequirements(dev->device, dev->sphere_vb, &vb_mem_reqs);
+    VkMemoryAllocateInfo vb_alloc = {0};
+    vb_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    vb_alloc.allocationSize  = vb_mem_reqs.size;
+    vb_alloc.memoryTypeIndex = rhi_vk_find_memory_type(dev, vb_mem_reqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(dev->device, &vb_alloc, NULL, &dev->sphere_vb_mem);
+    vkBindBufferMemory(dev->device, dev->sphere_vb, dev->sphere_vb_mem, 0);
+
+    void* mapped;
+    vkMapMemory(dev->device, dev->sphere_vb_mem, 0, vb_info.size, 0, &mapped);
+    memcpy(mapped, verts, vb_info.size);
+    vkUnmapMemory(dev->device, dev->sphere_vb_mem);
+
+    /* 创建索引缓冲 */
+    VkBufferCreateInfo ib_info = {0};
+    ib_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    ib_info.size  = icount * sizeof(uint32_t);
+    ib_info.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    ib_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vkCreateBuffer(dev->device, &ib_info, NULL, &dev->sphere_ib);
+
+    VkMemoryRequirements ib_mem_reqs;
+    vkGetBufferMemoryRequirements(dev->device, dev->sphere_ib, &ib_mem_reqs);
+    VkMemoryAllocateInfo ib_alloc = {0};
+    ib_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ib_alloc.allocationSize  = ib_mem_reqs.size;
+    ib_alloc.memoryTypeIndex = rhi_vk_find_memory_type(dev, ib_mem_reqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(dev->device, &ib_alloc, NULL, &dev->sphere_ib_mem);
+    vkBindBufferMemory(dev->device, dev->sphere_ib, dev->sphere_ib_mem, 0);
+
+    vkMapMemory(dev->device, dev->sphere_ib_mem, 0, ib_info.size, 0, &mapped);
+    memcpy(mapped, idxs, ib_info.size);
+    vkUnmapMemory(dev->device, dev->sphere_ib_mem);
+
+    dev->sphere_index_count = icount;
+    dev->sphere_rotation = 0.0f;
+
+    free(verts);
+    free(idxs);
+
+    CE_LOG_INFO("VULKAN", "Sphere mesh created: %u vertices, %u indices", vcount, icount);
 
     CE_LOG_INFO("VULKAN", "Vulkan device created successfully");
     return dev;
@@ -381,10 +518,12 @@ CeRhiDevice* rhi_create_device(const CeRhiConfig* config) {
 void rhi_destroy_device(CeRhiDevice* dev) {
     if (!dev) return;
 
-    vkDeviceWaitIdle(dev->device);
+    if (dev->device) {
+        vkDeviceWaitIdle(dev->device);
+    }
 
-    /* 清理交换链 */
-    if (dev->swapchain) {
+    /* 清理交换链 — 仅当 device 存在时 */
+    if (dev->device && dev->swapchain) {
         for (uint32_t i = 0; i < dev->image_count; i++) {
             if (dev->framebuffers) vkDestroyFramebuffer(dev->device, dev->framebuffers[i], NULL);
             if (dev->swapchain_views) vkDestroyImageView(dev->device, dev->swapchain_views[i], NULL);
@@ -400,10 +539,18 @@ void rhi_destroy_device(CeRhiDevice* dev) {
         vkDestroySwapchainKHR(dev->device, dev->swapchain, NULL);
     }
 
-    if (dev->graphics_pipeline) vkDestroyPipeline(dev->device, dev->graphics_pipeline, NULL);
-    if (dev->pipeline_layout) vkDestroyPipelineLayout(dev->device, dev->pipeline_layout, NULL);
-    if (dev->render_pass) vkDestroyRenderPass(dev->device, dev->render_pass, NULL);
-    if (dev->command_pool) vkDestroyCommandPool(dev->device, dev->command_pool, NULL);
+    if (dev->device) {
+        if (dev->graphics_pipeline) vkDestroyPipeline(dev->device, dev->graphics_pipeline, NULL);
+        if (dev->pipeline_layout) vkDestroyPipelineLayout(dev->device, dev->pipeline_layout, NULL);
+        if (dev->render_pass) vkDestroyRenderPass(dev->device, dev->render_pass, NULL);
+        if (dev->command_pool) vkDestroyCommandPool(dev->device, dev->command_pool, NULL);
+
+        /* 清理球体资源 */
+        if (dev->sphere_vb) vkDestroyBuffer(dev->device, dev->sphere_vb, NULL);
+        if (dev->sphere_vb_mem) vkFreeMemory(dev->device, dev->sphere_vb_mem, NULL);
+        if (dev->sphere_ib) vkDestroyBuffer(dev->device, dev->sphere_ib, NULL);
+        if (dev->sphere_ib_mem) vkFreeMemory(dev->device, dev->sphere_ib_mem, NULL);
+    }
 
     if (dev->debug_messenger) {
         PFN_vkDestroyDebugUtilsMessengerEXT func =
@@ -417,7 +564,7 @@ void rhi_destroy_device(CeRhiDevice* dev) {
     if (dev->instance) vkDestroyInstance(dev->instance, NULL);
 
     /* 清理 X11 窗口 */
-    if (dev->x11_window) XDestroyWindow(dev->x11_display, dev->x11_window);
+    if (dev->x11_display && dev->x11_window) XDestroyWindow(dev->x11_display, dev->x11_window);
     if (dev->x11_display) XCloseDisplay(dev->x11_display);
 
     free(dev);
@@ -611,9 +758,9 @@ static VkResult create_framebuffers(CeRhiDevice* dev) {
 
 static VkResult create_graphics_pipeline(CeRhiDevice* dev) {
     VkShaderModule vert_module = rhi_vk_create_shader_module(
-        dev, g_vert_shader_spv, sizeof(g_vert_shader_spv));
+        dev, g_sphere_vert_spv, g_sphere_vert_spv_len);
     VkShaderModule frag_module = rhi_vk_create_shader_module(
-        dev, g_frag_shader_spv, sizeof(g_frag_shader_spv));
+        dev, g_sphere_frag_spv, g_sphere_frag_spv_len);
 
     VkPipelineShaderStageCreateInfo vert_stage = {0};
     vert_stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -629,11 +776,24 @@ static VkResult create_graphics_pipeline(CeRhiDevice* dev) {
 
     VkPipelineShaderStageCreateInfo stages[] = {vert_stage, frag_stage};
 
-    /* 顶点输入（空，三角形硬编码在着色器中） */
+    /* 顶点输入：位置 (vec3) + 颜色 (vec3) = 6 floats = 24 bytes stride */
+    VkVertexInputBindingDescription binding_desc = {
+        .binding   = 0,
+        .stride    = 6 * sizeof(float),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+    };
+
+    VkVertexInputAttributeDescription attr_descs[2] = {
+        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
+        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 3 * sizeof(float) }
+    };
+
     VkPipelineVertexInputStateCreateInfo vertex_input = {0};
     vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertex_input.vertexBindingDescriptionCount   = 0;
-    vertex_input.vertexAttributeDescriptionCount = 0;
+    vertex_input.vertexBindingDescriptionCount   = 1;
+    vertex_input.pVertexBindingDescriptions      = &binding_desc;
+    vertex_input.vertexAttributeDescriptionCount = 2;
+    vertex_input.pVertexAttributeDescriptions    = attr_descs;
 
     VkPipelineInputAssemblyStateCreateInfo input_assembly = {0};
     input_assembly.sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -678,6 +838,15 @@ static VkResult create_graphics_pipeline(CeRhiDevice* dev) {
 
     VkPipelineLayoutCreateInfo pipeline_layout_info = {0};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
+    VkPushConstantRange push_range = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset     = 0,
+        .size       = sizeof(CeMat4)
+    };
+    pipeline_layout_info.pushConstantRangeCount = 1;
+    pipeline_layout_info.pPushConstantRanges    = &push_range;
+
     vkCreatePipelineLayout(dev->device, &pipeline_layout_info, NULL,
                            &dev->pipeline_layout);
 
@@ -704,7 +873,12 @@ static VkResult create_graphics_pipeline(CeRhiDevice* dev) {
 
     if (result != VK_SUCCESS) {
         fprintf(stderr, "VULKAN ERROR: create_graphics_pipeline failed: %d\n", result);
+        return result;
     }
+
+    /* NVIDIA 下部分驱动对无验证层/初始化过早的管线创建较敏感，
+     * 先做一次空闲同步，降低启动期竞态。 */
+    vkDeviceWaitIdle(dev->device);
     return result;
 }
 
@@ -751,9 +925,60 @@ static VkResult create_command_buffers(CeRhiDevice* dev) {
 void rhi_resize(CeRhiDevice* dev, int width, int height) {
     dev->width  = width;
     dev->height = height;
-    /* 重建交换链 */
+    /* 重建交换链：先停掉 GPU，再拆旧资源，最后按正确依赖顺序重建 */
     vkDeviceWaitIdle(dev->device);
-    /* 简化处理：销毁旧资源 */
+
+    if (dev->graphics_pipeline) {
+        vkDestroyPipeline(dev->device, dev->graphics_pipeline, NULL);
+        dev->graphics_pipeline = VK_NULL_HANDLE;
+    }
+    if (dev->pipeline_layout) {
+        vkDestroyPipelineLayout(dev->device, dev->pipeline_layout, NULL);
+        dev->pipeline_layout = VK_NULL_HANDLE;
+    }
+    if (dev->render_pass) {
+        vkDestroyRenderPass(dev->device, dev->render_pass, NULL);
+        dev->render_pass = VK_NULL_HANDLE;
+    }
+
+    /* 同步对象和命令缓冲是按 swapchain 生命周期分配的，这里也必须释放 */
+    if (dev->device) {
+        if (dev->command_buffers) {
+            vkFreeCommandBuffers(dev->device, dev->command_pool,
+                                 CE_VK_MAX_FRAMES_IN_FLIGHT, dev->command_buffers);
+            free(dev->command_buffers);
+            dev->command_buffers = NULL;
+        }
+        if (dev->image_available) {
+            for (uint32_t i = 0; i < CE_VK_MAX_FRAMES_IN_FLIGHT; i++) {
+                if (dev->image_available[i]) {
+                    vkDestroySemaphore(dev->device, dev->image_available[i], NULL);
+                }
+            }
+            free(dev->image_available);
+            dev->image_available = NULL;
+        }
+        if (dev->render_finished) {
+            for (uint32_t i = 0; i < CE_VK_MAX_FRAMES_IN_FLIGHT; i++) {
+                if (dev->render_finished[i]) {
+                    vkDestroySemaphore(dev->device, dev->render_finished[i], NULL);
+                }
+            }
+            free(dev->render_finished);
+            dev->render_finished = NULL;
+        }
+        if (dev->in_flight_fences) {
+            for (uint32_t i = 0; i < CE_VK_MAX_FRAMES_IN_FLIGHT; i++) {
+                if (dev->in_flight_fences[i]) {
+                    vkDestroyFence(dev->device, dev->in_flight_fences[i], NULL);
+                }
+            }
+            free(dev->in_flight_fences);
+            dev->in_flight_fences = NULL;
+        }
+    }
+
+    /* 释放旧交换链图像/视图/帧缓冲 */
     for (uint32_t i = 0; i < dev->image_count; i++) {
         vkDestroyFramebuffer(dev->device, dev->framebuffers[i], NULL);
         vkDestroyImageView(dev->device, dev->swapchain_views[i], NULL);
@@ -761,20 +986,71 @@ void rhi_resize(CeRhiDevice* dev, int width, int height) {
     free(dev->swapchain_images);
     free(dev->swapchain_views);
     free(dev->framebuffers);
-    vkDestroySwapchainKHR(dev->device, dev->swapchain, NULL);
+    dev->swapchain_images = NULL;
+    dev->swapchain_views  = NULL;
+    dev->framebuffers     = NULL;
 
-    create_swapchain(dev);
-    create_render_pass(dev);
-    create_framebuffers(dev);
+    vkDestroySwapchainKHR(dev->device, dev->swapchain, NULL);
+    dev->swapchain = VK_NULL_HANDLE;
+
+    /* 按 swapchain -> render pass -> pipeline -> framebuffers 重建 */
+    if (create_swapchain(dev) != VK_SUCCESS ||
+        create_render_pass(dev) != VK_SUCCESS ||
+        create_graphics_pipeline(dev) != VK_SUCCESS ||
+        create_framebuffers(dev) != VK_SUCCESS) {
+        CE_LOG_ERROR("VULKAN", "Failed to rebuild swapchain resources");
+        dev->frame_valid = CE_FALSE;
+        return;
+    }
+
+    dev->frame_valid = CE_FALSE;
 }
 
 CeBool rhi_should_close(CeRhiDevice* dev) {
     return dev->should_close;
 }
 
+static CeKey rhi_vk_translate_keysym(KeySym sym) {
+    switch (sym) {
+        case XK_Escape: return CE_KEY_ESCAPE;
+        case XK_Left:   return CE_KEY_LEFT;
+        case XK_Right:  return CE_KEY_RIGHT;
+        case XK_Up:     return CE_KEY_UP;
+        case XK_Down:   return CE_KEY_DOWN;
+        case XK_a:
+        case XK_A:      return CE_KEY_A;
+        case XK_d:
+        case XK_D:      return CE_KEY_D;
+        case XK_w:
+        case XK_W:      return CE_KEY_W;
+        case XK_s:
+        case XK_S:      return CE_KEY_S;
+        default:        return CE_KEY_UNKNOWN;
+    }
+}
+
+static void rhi_vk_sync_key(Display* dpy, KeySym sym, CeKey key, const char* keymap) {
+    if (!dpy || key == CE_KEY_UNKNOWN) return;
+    KeyCode code = XKeysymToKeycode(dpy, sym);
+    if (code == 0) return;
+    int pressed = (keymap[code / 8] & (1 << (code % 8))) != 0;
+    ce_input_set_key_state(key, pressed ? CE_TRUE : CE_FALSE);
+}
+
 void rhi_poll_events(CeRhiDevice* dev) {
     /* 处理 X11 事件 */
     if (dev->x11_display) {
+        Window focused_window = None;
+        int focused_revert = RevertToNone;
+        XGetInputFocus(dev->x11_display, &focused_window, &focused_revert);
+        CeBool has_focus = (focused_window == dev->x11_window);
+
+        if (!has_focus) {
+            for (int k = 0; k < CE_KEY_COUNT; ++k) {
+                ce_input_set_key_state((CeKey)k, CE_FALSE);
+            }
+        }
+
         XEvent event;
         while (XPending(dev->x11_display)) {
             XNextEvent(dev->x11_display, &event);
@@ -788,18 +1064,64 @@ void rhi_poll_events(CeRhiDevice* dev) {
                 case DestroyNotify:
                     dev->should_close = CE_TRUE;
                     break;
-                case KeyPress:
-                    if (event.xkey.keycode == 9) { /* Escape */
+                case FocusIn:
+                    for (int k = 0; k < CE_KEY_COUNT; ++k) {
+                        ce_input_set_key_state((CeKey)k, CE_FALSE);
+                    }
+                    CE_LOG_INFO("VULKAN", "Window focused");
+                    break;
+                case FocusOut:
+                    for (int k = 0; k < CE_KEY_COUNT; ++k) {
+                        ce_input_set_key_state((CeKey)k, CE_FALSE);
+                    }
+                    CE_LOG_INFO("VULKAN", "Window unfocused");
+                    break;
+                case KeyPress: {
+                    KeySym sym = XLookupKeysym(&event.xkey, 0);
+                    CeKey key = rhi_vk_translate_keysym(sym);
+                    if (key != CE_KEY_UNKNOWN && has_focus) {
+                        ce_input_set_key_state(key, CE_TRUE);
+                    }
+                    if (sym == XK_Escape) {
                         dev->should_close = CE_TRUE;
                     }
                     break;
+                }
+                case KeyRelease: {
+                    KeySym sym = XLookupKeysym(&event.xkey, 0);
+                    CeKey key = rhi_vk_translate_keysym(sym);
+                    if (key != CE_KEY_UNKNOWN) {
+                        ce_input_set_key_state(key, CE_FALSE);
+                    }
+                    break;
+                }
             }
+        }
+
+        if (has_focus) {
+            /* 兜底同步一次键盘状态，避免事件丢失导致按键不更新 */
+            char keymap[32] = {0};
+            XQueryKeymap(dev->x11_display, keymap);
+            rhi_vk_sync_key(dev->x11_display, XK_Left,  CE_KEY_LEFT,  keymap);
+            rhi_vk_sync_key(dev->x11_display, XK_Right, CE_KEY_RIGHT, keymap);
+            rhi_vk_sync_key(dev->x11_display, XK_Up,    CE_KEY_UP,    keymap);
+            rhi_vk_sync_key(dev->x11_display, XK_Down,  CE_KEY_DOWN,  keymap);
+            rhi_vk_sync_key(dev->x11_display, XK_a,     CE_KEY_A,     keymap);
+            rhi_vk_sync_key(dev->x11_display, XK_d,     CE_KEY_D,     keymap);
+            rhi_vk_sync_key(dev->x11_display, XK_w,     CE_KEY_W,     keymap);
+            rhi_vk_sync_key(dev->x11_display, XK_s,     CE_KEY_S,     keymap);
         }
     }
     ce_window_poll_events();
     if (dev->window) {
         dev->should_close = ce_window_should_close(dev->window);
     }
+}
+
+void rhi_set_window_title(CeRhiDevice* dev, const char* title) {
+    if (!dev || !dev->x11_display) return;
+    XStoreName(dev->x11_display, dev->x11_window, title ? title : "ChaosEngine");
+    XFlush(dev->x11_display);
 }
 
 /* ---- 资源创建 ---- */
@@ -1168,6 +1490,35 @@ void rhi_begin_frame(CeRhiDevice* dev, CeColor clear_color) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dev->graphics_pipeline);
     }
 
+    /* 绑定球体顶点缓冲和索引缓冲 */
+    if (dev->sphere_vb) {
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(cmd, 0, 1, &dev->sphere_vb, offsets);
+    }
+    if (dev->sphere_ib) {
+        vkCmdBindIndexBuffer(cmd, dev->sphere_ib, 0, VK_INDEX_TYPE_UINT32);
+    }
+
+    /* 计算 MVP 矩阵并设置 Push Constant */
+    dev->sphere_rotation += 0.01f;
+    if (dev->sphere_rotation > 2.0f * (float)M_PI) {
+        dev->sphere_rotation -= 2.0f * (float)M_PI;
+    }
+
+    float aspect = (float)dev->width / (float)dev->height;
+    CeMat4 proj = ce_mat4_perspective(ce_radians(45.0f), aspect, 0.1f, 100.0f);
+    CeMat4 view = ce_mat4_look_at(
+        (CeVec3){0.0f, 0.0f, 3.0f},
+        (CeVec3){0.0f, 0.0f, 0.0f},
+        (CeVec3){0.0f, 1.0f, 0.0f}
+    );
+    CeMat4 model = ce_mat4_rotation(ce_quat_euler(0.0f, dev->sphere_rotation, 0.0f));
+    CeMat4 mvp = ce_mat4_mul(proj, ce_mat4_mul(view, model));
+
+    vkCmdPushConstants(cmd, dev->pipeline_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT,
+                       0, sizeof(CeMat4), &mvp);
+
     dev->current_image_index = image_index;
 }
 
@@ -1195,9 +1546,14 @@ void rhi_set_uniform_mat4(CeRhiDevice* dev, const char* name, const CeMat4* mat)
 }
 
 void rhi_draw(CeRhiDevice* dev, uint32_t vertex_count, uint32_t first_vertex) {
+    (void)vertex_count;
+    (void)first_vertex;
     if (!dev->frame_valid) return;
     VkCommandBuffer cmd = dev->command_buffers[dev->current_frame];
-    vkCmdDraw(cmd, vertex_count, 1, first_vertex, 0);
+    /* 绘制球体（索引绘制） */
+    if (dev->sphere_index_count > 0) {
+        vkCmdDrawIndexed(cmd, dev->sphere_index_count, 1, 0, 0, 0);
+    }
 }
 
 void rhi_draw_indexed(CeRhiDevice* dev, uint32_t index_count, uint32_t first_index) {

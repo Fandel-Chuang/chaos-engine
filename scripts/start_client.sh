@@ -22,7 +22,6 @@ NC='\033[0m'
 
 MODE="vulkan"
 CONNECT=""
-USE_XVFB=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -76,6 +75,16 @@ resolve_x_display() {
     fi
 }
 
+show_status_overlay() {
+    local mode="$1"
+    local connect_arg="$2"
+    if [ -n "$connect_arg" ]; then
+        echo -e "${BLUE}🎯 目标: ${connect_arg}${NC}"
+    fi
+    echo -e "${GREEN}🕹️  方向键移动球体，ESC 退出${NC}"
+    echo -e "${GREEN}📍 坐标会在窗口标题/控制台中持续更新${NC}"
+}
+
 case "$MODE" in
     vulkan)
         resolve_x_display
@@ -88,6 +97,7 @@ esac
 case "$MODE" in
     vulkan)
         echo -e "${BLUE}🚀 启动 Vulkan 渲染客户端...${NC}"
+        show_status_overlay "$MODE" "$CONNECT"
         if [ -n "$CONNECT" ]; then
             "${BIN_DIR}/chaos_client" --connect "$CONNECT"
         else

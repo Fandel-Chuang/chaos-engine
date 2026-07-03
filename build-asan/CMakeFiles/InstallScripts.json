@@ -1,0 +1,15 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/zhongfangdao/chaos-engine/build-asan/cmake_install.cmake",
+		"/home/zhongfangdao/chaos-engine/build-asan/src_c/cmake_install.cmake",
+		"/home/zhongfangdao/chaos-engine/build-asan/src_c/server/cmake_install.cmake",
+		"/home/zhongfangdao/chaos-engine/build-asan/src_c/sync/cmake_install.cmake",
+		"/home/zhongfangdao/chaos-engine/build-asan/src_c/dbproxy/cmake_install.cmake",
+		"/home/zhongfangdao/chaos-engine/build-asan/src_c/admin_ipc/cmake_install.cmake",
+		"/home/zhongfangdao/chaos-engine/build-asan/src_c/save/cmake_install.cmake",
+		"/home/zhongfangdao/chaos-engine/build-asan/schemas/cmake_install.cmake",
+		"/home/zhongfangdao/chaos-engine/build-asan/src_cpp/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

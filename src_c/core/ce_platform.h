@@ -96,6 +96,13 @@ CeBool ce_input_is_key_down(CeKey key);
 CeBool ce_input_is_key_pressed(CeKey key);   /* 本帧刚按下 */
 CeBool ce_input_is_key_released(CeKey key);  /* 本帧刚释放 */
 
+/* 内部输入更新（由平台事件层调用） */
+void ce_input_set_key_state(CeKey key, CeBool down);
+void ce_input_set_mouse_state(CeMouseButton button, CeBool down);
+void ce_input_set_mouse_pos(float x, float y);
+void ce_input_add_mouse_delta(float dx, float dy);
+void ce_input_set_mouse_scroll(float scroll);
+
 /* 鼠标 */
 CeBool ce_input_is_mouse_down(CeMouseButton button);
 CeBool ce_input_is_mouse_pressed(CeMouseButton button);

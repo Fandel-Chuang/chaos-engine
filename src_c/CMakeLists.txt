@@ -176,6 +176,7 @@ set_target_properties(chaos_headless PROPERTIES LINKER_LANGUAGE C)
 # ============================================================
 add_executable(chaos_client
     runtime/ce_client_main.c
+    runtime/ce_client_network.c
 )
 target_include_directories(chaos_client PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

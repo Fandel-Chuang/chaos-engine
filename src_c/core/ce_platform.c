@@ -333,6 +333,30 @@ float ce_input_get_mouse_scroll(void) {
     return g_input.mouse_scroll;
 }
 
+void ce_input_set_key_state(CeKey key, CeBool down) {
+    if (key >= CE_KEY_COUNT) return;
+    g_input.keys[key] = down;
+}
+
+void ce_input_set_mouse_state(CeMouseButton button, CeBool down) {
+    if (button > 4) return;
+    g_input.mouse_buttons[button] = down;
+}
+
+void ce_input_set_mouse_pos(float x, float y) {
+    g_input.mouse_x = x;
+    g_input.mouse_y = y;
+}
+
+void ce_input_add_mouse_delta(float dx, float dy) {
+    g_input.mouse_dx += dx;
+    g_input.mouse_dy += dy;
+}
+
+void ce_input_set_mouse_scroll(float scroll) {
+    g_input.mouse_scroll = scroll;
+}
+
 void ce_input_end_frame(void) {
     memcpy(g_input.keys_prev, g_input.keys, sizeof(g_input.keys));
     memcpy(g_input.mouse_buttons_prev, g_input.mouse_buttons, sizeof(g_input.mouse_buttons));

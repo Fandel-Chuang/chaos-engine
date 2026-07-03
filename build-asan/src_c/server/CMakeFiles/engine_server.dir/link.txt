@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/libengine_server.a CMakeFiles/engine_server.dir/ce_aoi.c.o CMakeFiles/engine_server.dir/ce_cell.c.o CMakeFiles/engine_server.dir/ce_game_session.c.o
+/usr/bin/ranlib ../../lib/libengine_server.a

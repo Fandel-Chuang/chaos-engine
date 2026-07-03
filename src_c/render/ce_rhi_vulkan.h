@@ -70,6 +70,14 @@ typedef struct CeRhiDevice {
 
     /* 调试 */
     VkDebugUtilsMessengerEXT debug_messenger;
+
+    /* 球体渲染资源 */
+    VkBuffer         sphere_vb;
+    VkDeviceMemory   sphere_vb_mem;
+    VkBuffer         sphere_ib;
+    VkDeviceMemory   sphere_ib_mem;
+    uint32_t         sphere_index_count;
+    float            sphere_rotation;
 } CeRhiDeviceVk;
 
 /* ---- 缓冲结构 ---- */

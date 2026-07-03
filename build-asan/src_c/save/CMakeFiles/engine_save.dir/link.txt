@@ -1,0 +1,2 @@
+/usr/bin/ar qc ../../lib/libengine_save.a CMakeFiles/engine_save.dir/ce_save.c.o
+/usr/bin/ranlib ../../lib/libengine_save.a

@@ -312,6 +312,16 @@ target_link_libraries(test_mailbox PRIVATE engine_core)
 set_target_properties(test_mailbox PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME mailbox COMMAND test_mailbox WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
+# ---- test_game_session ----
+add_executable(test_game_session unit/test_game_session.c)
+target_include_directories(test_game_session PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_game_session PRIVATE engine_core engine_server)
+set_target_properties(test_game_session PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME game_session COMMAND test_game_session)
+
 # ============================================================
 # 性能基准测试 (Phase 2.5/2.6)
 # ============================================================
