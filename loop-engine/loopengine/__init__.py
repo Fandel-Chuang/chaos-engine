@@ -171,7 +171,12 @@ class LoopEngine:
         # 适配层组件
         script_exec = ScriptExec(cfg.chaos_engine_dir)
         proc_manager = ProcessManager(cfg.chaos_engine_dir)
-        ci_trigger = CITrigger(gitee_token=cfg.gitee_token, repo=cfg.gitee_repo)
+        ci_trigger = CITrigger(
+            gitee_token=cfg.gitee_token,
+            repo=cfg.gitee_repo,
+            chaos_engine_dir=cfg.chaos_engine_dir,
+            trigger_branch=cfg.trigger_branch,
+        )
         admin_query = AdminQuery()
         screenshot = ScreenshotCapture()
 

@@ -1,24 +1,31 @@
-"""CI 触发器 - spec 6.2.2。
+"""CI 触发器 - spec 6.2.2（Gitee 免费版适配）。
 
-通过 Gitee Go API 触发/轮询/解析 CI 流水线。
+Gitee 免费版 Go 不支持手动触发流水线的 API（POST /repos/{repo}/builds 返回 405），
+也不支持 commit status API（GET /repos/{repo}/commits/{sha}/status 返回 404）。
+
+适配方案：通过 git push 空 commit 触发 Gitee Go CI，再轮询 commit 的构建状态。
 核心原则：测试流程必须通过 Git CI 完成，LoopEngine 只触发/轮询/解析，不本地执行测试脚本。
-复用 .gitee-ci.yml 现有 5 job（build-and-test/release-build/lua-lint/memcheck），
-不新增不修改。
+复用 .gitee-ci.yml 现有 5 job（build-and-test/release-build/lua-lint/memcheck），不新增不修改。
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import subprocess
 import time
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 
 class CITrigger:
-    """Gitee Go CI 触发器。
+    """Gitee Go CI 触发器（Gitee 免费版适配）。
 
-    通过 Gitee API v5 触发流水线、查询状态、拉取日志、解析测试结果。
+    通过 git push 空 commit 触发流水线，轮询 Gitee API 查构建状态。
+    git push 使用已有 SSH key 认证（~/.ssh/id_ed25519_gitee），无需额外凭证。
     """
 
     API_BASE = "https://gitee.com/api/v5"
@@ -26,19 +33,28 @@ class CITrigger:
     # CI 终态状态值
     TERMINAL_STATUSES = {"completed", "failure", "success", "cancelled", "skipped"}
 
+    # 运行中状态值
+    RUNNING_STATUSES = {"running", "pending", "queued", "in_progress", "waiting"}
+
     def __init__(
         self,
         gitee_token: str,
         repo: str = "zhong-fangdao/chaos-engine",
+        chaos_engine_dir: str = "/home/zhongfangdao/chaos-engine",
+        trigger_branch: str = "master",
     ) -> None:
         """初始化 CI 触发器。
 
         Args:
             gitee_token: Gitee API 访问令牌。
             repo: 仓库全名（owner/repo）。
+            chaos_engine_dir: ChaosEngine 项目根目录（git 仓库路径），用于执行 git 命令。
+            trigger_branch: 默认触发分支。
         """
         self.gitee_token = gitee_token
         self.repo = repo
+        self.chaos_engine_dir = chaos_engine_dir
+        self.trigger_branch = trigger_branch
         self.api_base = self.API_BASE
 
     def _headers(self) -> dict[str, str]:
@@ -49,175 +65,334 @@ class CITrigger:
             "Accept": "application/json",
         }
 
-    def _runs_url(self) -> str:
-        """流水线 runs 基础 URL。"""
-        return f"{self.api_base}/repos/{self.repo}/actions/runs"
+    def _params(self) -> dict[str, str]:
+        """构建查询参数（Gitee API v5 要求 access_token 查询参数认证）。"""
+        return {"access_token": self.gitee_token}
 
-    async def trigger_pipeline(self, branch: str = "develop") -> dict:
-        """触发 CI 流水线。
+    async def trigger_pipeline(self, branch: str | None = None) -> dict:
+        """通过 git push 空 commit 触发 Gitee Go CI。
 
-        通过 Gitee API v5 触发指定分支的 Actions 流水线。
+        Gitee 免费版不支持 POST /repos/{repo}/builds API（返回 405），
+        改为在 chaos_engine_dir 下执行 git commit --allow-empty + git push，
+        利用 Gitee Go 的 push 触发器自动启动 CI。
 
         Args:
-            branch: 触发分支名。
+            branch: 触发分支名，默认使用 self.trigger_branch。
 
         Returns:
-            dict: 流水线信息，至少包含 run_id。
+            dict: 触发结果，格式为:
+                {triggered: True, branch: str, commit_sha: str, method: "git_push"}
 
         Raises:
-            RuntimeError: 触发失败（HTTP 非 2xx）。
+            RuntimeError: git commit 或 git push 失败。
         """
-        url = self._runs_url()
-        # Gitee API v5 要求 access_token 查询参数认证
-        payload = {"branch": branch}
+        branch = branch or self.trigger_branch
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                url, json=payload, headers=self._headers(),
-                params={"access_token": self.gitee_token},
-            )
-
-        if resp.status_code >= 400:
+        # 1. git commit --allow-empty
+        commit_msg = "loopengine: trigger CI"
+        commit_proc = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "commit", "--allow-empty", "-m", commit_msg],
+            cwd=self.chaos_engine_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if commit_proc.returncode != 0:
             raise RuntimeError(
-                f"触发流水线失败 (HTTP {resp.status_code}): {resp.text}"
+                f"git commit --allow-empty 失败 (rc={commit_proc.returncode}): "
+                f"{commit_proc.stderr.strip()}"
             )
+        logger.debug("[ci] git commit stdout: %s", commit_proc.stdout.strip())
 
-        data = resp.json()
-        # Gitee 返回的 run id 字段可能是 id 或 run_id
-        run_id = str(data.get("id") or data.get("run_id") or "")
-        return {"run_id": run_id, "branch": branch, "raw": data}
+        # 2. git push origin {branch}
+        push_proc = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "push", "origin", branch],
+            cwd=self.chaos_engine_dir,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if push_proc.returncode != 0:
+            raise RuntimeError(
+                f"git push origin {branch} 失败 (rc={push_proc.returncode}): "
+                f"{push_proc.stderr.strip()}"
+            )
+        logger.debug("[ci] git push stdout: %s", push_proc.stdout.strip())
 
-    async def get_pipeline_status(self, run_id: str) -> dict:
-        """查询流水线状态。
+        # 3. 获取新 commit 的 sha
+        sha_proc = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.chaos_engine_dir,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if sha_proc.returncode != 0:
+            raise RuntimeError(
+                f"git rev-parse HEAD 失败 (rc={sha_proc.returncode}): "
+                f"{sha_proc.stderr.strip()}"
+            )
+        commit_sha = sha_proc.stdout.strip()
+
+        logger.info(
+            "[ci] CI 已通过 git push 触发, branch=%s, commit_sha=%s",
+            branch, commit_sha[:12],
+        )
+
+        return {
+            "triggered": True,
+            "branch": branch,
+            "commit_sha": commit_sha,
+            "method": "git_push",
+        }
+
+    async def get_pipeline_status(self, commit_sha: str) -> dict:
+        """查询 CI 构建状态 - 通过 Gitee API 查 commit 的构建状态。
+
+        Gitee 免费版 commit status API（GET /repos/{repo}/commits/{sha}/status）
+        也不可用（404）。尝试以下替代方案：
+
+        1. GET /repos/{repo}/builds?sha={sha} - 查指定 sha 的构建记录
+        2. 回退：GET /repos/{repo}/commits?per_page=1 - 查最新 commit 的状态字段
 
         Args:
-            run_id: 流水线运行 ID。
+            commit_sha: 触发 CI 的 commit SHA。
 
         Returns:
             dict: 状态信息，格式为:
                 {
-                    "status": "running" | "completed" | "failure" | ...,
+                    "status": "running" | "success" | "failure" | "unknown",
+                    "sha": str,
                     "jobs": [{"name": str, "status": str, "conclusion": str|None}]
                 }
-
-        Raises:
-            RuntimeError: 查询失败。
         """
-        url = f"{self._runs_url()}/{run_id}"
+        # 方案1: GET /repos/{repo}/builds?sha={sha}
+        builds_url = f"{self.api_base}/repos/{self.repo}/builds"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    builds_url,
+                    headers=self._headers(),
+                    params={**self._params(), "sha": commit_sha},
+                )
+        except httpx.HTTPError as e:
+            logger.warning("[ci] 查询 builds API 网络异常: %s", e)
+            return {"status": "unknown", "sha": commit_sha, "jobs": []}
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                url, headers=self._headers(),
-                params={"access_token": self.gitee_token},
+        if resp.status_code == 200:
+            data = resp.json()
+            return self._parse_builds_response(data, commit_sha)
+
+        # 方案2回退: GET /repos/{repo}/commits/{sha} 查 commit 状态
+        commit_url = f"{self.api_base}/repos/{self.repo}/commits/{commit_sha}"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp2 = await client.get(
+                    commit_url,
+                    headers=self._headers(),
+                    params=self._params(),
+                )
+        except httpx.HTTPError as e:
+            logger.warning("[ci] 查询 commit API 网络异常: %s", e)
+            return {"status": "unknown", "sha": commit_sha, "jobs": []}
+
+        if resp2.status_code == 200:
+            commit_data = resp2.json()
+            # Gitee commit 可能有 build_status / ci_status 字段
+            status = (
+                commit_data.get("build_status")
+                or commit_data.get("ci_status")
+                or commit_data.get("status")
+                or "unknown"
             )
+            return {
+                "status": self._normalize_status(status),
+                "sha": commit_sha,
+                "jobs": [],
+            }
 
-        if resp.status_code >= 400:
-            raise RuntimeError(
-                f"查询流水线状态失败 (HTTP {resp.status_code}): {resp.text}"
-            )
+        logger.warning(
+            "[ci] 查询 CI 状态失败: builds HTTP %d, commits HTTP %d",
+            resp.status_code, resp2.status_code,
+        )
+        return {"status": "unknown", "sha": commit_sha, "jobs": []}
 
-        data = resp.json()
+    def _parse_builds_response(self, data: dict | list, commit_sha: str) -> dict:
+        """解析 GET /builds 响应。
 
-        # 解析流水线总体状态
-        status = data.get("status") or data.get("state") or "unknown"
+        Gitee builds API 可能返回列表或含列表的 dict。
+        """
+        builds: list = []
+        if isinstance(data, list):
+            builds = data
+        elif isinstance(data, dict):
+            builds = data.get("data") or data.get("builds") or data.get("items") or []
+            if isinstance(builds, dict):
+                builds = [builds]
 
-        # 解析 jobs 列表
-        jobs_raw = data.get("jobs") or data.get("workflow_run_jobs") or []
+        if not builds:
+            return {"status": "unknown", "sha": commit_sha, "jobs": []}
+
+        # 取第一个（最新）构建记录
+        build = builds[0] if isinstance(builds, list) else {}
+        status = (
+            build.get("status")
+            or build.get("state")
+            or build.get("result")
+            or "unknown"
+        )
+
         jobs = []
+        jobs_raw = build.get("jobs") or build.get("stages") or []
         for job in jobs_raw:
-            jobs.append(
-                {
-                    "name": job.get("name") or job.get("job_name") or "",
-                    "status": job.get("status") or job.get("state") or "",
-                    "conclusion": job.get("conclusion")
-                    or job.get("result")
-                    or None,
-                }
-            )
+            jobs.append({
+                "name": job.get("name") or job.get("job_name") or "",
+                "status": job.get("status") or job.get("state") or "",
+                "conclusion": job.get("conclusion") or job.get("result") or None,
+            })
 
-        return {"status": status, "jobs": jobs, "raw": data}
+        return {
+            "status": self._normalize_status(status),
+            "sha": commit_sha,
+            "jobs": jobs,
+        }
+
+    def _normalize_status(self, raw: str) -> str:
+        """将 Gitee 各种状态值归一化。"""
+        if not raw:
+            return "unknown"
+        raw_lower = raw.lower()
+
+        # 运行中
+        if raw_lower in self.RUNNING_STATUSES or "run" in raw_lower or "pending" in raw_lower:
+            return "running"
+        # 成功
+        if raw_lower in ("success", "passed", "completed", "succeed", "ok"):
+            return "success"
+        # 失败
+        if raw_lower in ("failure", "failed", "error", "cancelled", "canceled"):
+            return "failure"
+        # 跳过
+        if raw_lower in ("skipped", "skip"):
+            return "skipped"
+        return "unknown"
 
     async def poll_until_complete(
         self,
-        run_id: str,
+        trigger_result: dict,
         timeout: int = 1800,
-        interval: int = 15,
+        interval: int = 30,
     ) -> dict:
-        """轮询流水线直到完成或超时。
+        """轮询 CI 构建状态直到完成或超时。
 
         Args:
-            run_id: 流水线运行 ID。
-            timeout: 最大等待时间（秒）。
-            interval: 轮询间隔（秒）。
+            trigger_result: trigger_pipeline 的返回值，需包含 commit_sha。
+            timeout: 最大等待时间（秒），默认 1800（30 分钟）。
+            interval: 轮询间隔（秒），默认 30。
 
         Returns:
-            dict: 最终的流水线状态（含 jobs）。
+            dict: 最终的 CI 状态（含 jobs），格式同 get_pipeline_status。
+                  超时则 status 设为 "timeout"。
         """
-        start = time.time()
-        while time.time() - start < timeout:
-            status_info = await self.get_pipeline_status(run_id)
-            status = status_info["status"]
+        commit_sha = trigger_result.get("commit_sha", "")
+        if not commit_sha:
+            return {"status": "unknown", "sha": "", "jobs": [], "error": "无 commit_sha"}
 
-            if status in self.TERMINAL_STATUSES:
-                return status_info
+        start = time.time()
+        last_status: dict = {"status": "unknown", "sha": commit_sha, "jobs": []}
+
+        # 首次等待一个 interval，给 Gitee Go 启动时间
+        await asyncio.sleep(min(interval, 10))
+
+        while time.time() - start < timeout:
+            try:
+                status_info = await self.get_pipeline_status(commit_sha)
+                last_status = status_info
+                status = status_info["status"]
+
+                logger.debug(
+                    "[ci] 轮询 CI 状态: status=%s, elapsed=%.0fs",
+                    status, time.time() - start,
+                )
+
+                if status in self.TERMINAL_STATUSES:
+                    return status_info
+
+            except Exception as e:
+                logger.warning("[ci] 轮询异常（继续重试）: %s", e)
 
             await asyncio.sleep(interval)
 
-        # 超时，返回最后一次状态并标记
-        last_status = await self.get_pipeline_status(run_id)
+        # 超时
         last_status["status"] = "timeout"
         return last_status
 
-    async def fetch_job_logs(self, run_id: str, job_name: str) -> str:
+    async def fetch_job_logs(self, commit_sha: str, job_name: str) -> str:
         """拉取指定 job 的日志。
 
-        先查询流水线获取 job_id，再拉取日志内容。
+        Gitee 免费版可能无法通过 API 获取 CI job 日志。
+        尝试通过 builds API 查找 job_id 再拉日志，失败则返回提示信息。
 
         Args:
-            run_id: 流水线运行 ID。
+            commit_sha: 触发 CI 的 commit SHA。
             job_name: job 名称（如 "build-and-test"）。
 
         Returns:
-            str: job 日志文本。拉取失败时返回空字符串。
+            str: job 日志文本。拉取失败时返回提示信息字符串。
         """
-        # 先获取 job 列表，找到 job_id
-        status_info = await self.get_pipeline_status(run_id)
-        jobs = status_info.get("raw", {}).get("jobs") or []
+        status_info = await self.get_pipeline_status(commit_sha)
+        jobs = status_info.get("jobs", [])
 
         job_id = None
         for job in jobs:
-            name = job.get("name") or job.get("job_name") or ""
+            name = job.get("name", "")
             if job_name in name or name in job_name:
                 job_id = str(job.get("id") or job.get("job_id") or "")
                 break
 
         if not job_id:
-            return ""
+            return (
+                f"[Gitee 免费版限制] 无法通过 API 获取 job '{job_name}' 的日志。"
+                f"请前往 https://gitee.com/{self.repo}/builds 手动查看。"
+            )
 
-        url = f"{self._runs_url()}/{run_id}/jobs/{job_id}/logs"
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                url, headers=self._headers(),
-                params={"access_token": self.gitee_token},
+        url = f"{self.api_base}/repos/{self.repo}/builds/jobs/{job_id}/logs"
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    url, headers=self._headers(), params=self._params(),
+                )
+        except httpx.HTTPError:
+            return (
+                f"[Gitee 免费版限制] 拉取 job '{job_name}' 日志网络异常。"
+                f"请前往 https://gitee.com/{self.repo}/builds 手动查看。"
             )
 
         if resp.status_code >= 400:
-            return ""
+            return (
+                f"[Gitee 免费版限制] 拉取 job '{job_name}' 日志失败 (HTTP {resp.status_code})。"
+                f"请前往 https://gitee.com/{self.repo}/builds 手动查看。"
+            )
 
         return resp.text
 
-    async def parse_test_results(self, run_id: str) -> dict:
-        """解析所有 job 的测试结果。
+    async def parse_test_results(self, trigger_result: dict) -> dict:
+        """解析所有 job 的测试结果 - 基于 CI 构建状态。
 
-        拉取各 job 日志，解析结构化结果:
-        - build_test: ctest 通过/失败数
-        - lua_lint: 语法错误数
-        - valgrind: 内存泄漏数
-        - smoke: 集群冒烟结果
+        Gitee 免费版无法通过 API 获取 CI job 日志，因此解析能力有限。
+        基于 get_pipeline_status 返回的整体构建状态推断各 job 结果。
+
+        限制说明：
+        - 无法获取 ctest 通过/失败数（需解析 job 日志，但 API 不可用）
+        - 无法获取 lua-lint 错误数
+        - 无法获取 valgrind 泄漏数
+        - 只能基于整体 CI 状态推断 success/failure
 
         Args:
-            run_id: 流水线运行 ID。
+            trigger_result: trigger_pipeline 的返回值，需包含 commit_sha。
 
         Returns:
             dict: 解析结果，格式为:
@@ -225,69 +400,76 @@ class CITrigger:
                     "build_test": {"status": str, "ctest_pass": int, "ctest_fail": int},
                     "lua_lint": {"status": str, "errors": int},
                     "valgrind": {"status": str, "leaks": int},
-                    "smoke": {"status": str}
+                    "smoke": {"status": str},
+                    "note": str  # 说明限制
                 }
         """
-        # 获取流水线状态和 job 列表
-        status_info = await self.get_pipeline_status(run_id)
+        commit_sha = trigger_result.get("commit_sha", "")
+        if not commit_sha:
+            return {
+                "build_test": {"status": "unknown", "ctest_pass": 0, "ctest_fail": 0},
+                "lua_lint": {"status": "unknown", "errors": 0},
+                "valgrind": {"status": "unknown", "leaks": 0},
+                "smoke": {"status": "unknown"},
+                "note": "无 commit_sha，无法查询 CI 状态",
+            }
+
+        status_info = await self.get_pipeline_status(commit_sha)
+        ci_status = status_info.get("status", "unknown")
         jobs = status_info.get("jobs", [])
 
-        # job 名称到结果的映射
+        # 如果有 job 级别状态，按 job 解析
         job_status_map: dict[str, str] = {}
         for job in jobs:
             name = job.get("name", "")
-            # 归一化 job 名
             status = job.get("conclusion") or job.get("status") or "unknown"
             job_status_map[name] = status
 
-        results: dict = {}
+        # 如果有 job 级别信息，使用 job 级别；否则用整体 CI 状态
+        if job_status_map:
+            bt_status = _find_job_status(job_status_map, "build-and-test", "build_test")
+            lint_status = _find_job_status(job_status_map, "lua-lint", "lua_lint")
+            vg_status = _find_job_status(
+                job_status_map, "memcheck", "valgrind", "memcheck"
+            )
+            smoke_status = bt_status  # 冒烟在 build-and-test 内
+        else:
+            # 无 job 级别信息，整体 CI 状态映射到所有 job
+            bt_status = ci_status
+            lint_status = ci_status
+            vg_status = ci_status
+            smoke_status = ci_status
 
-        # ── build_test: 解析 ctest 结果 ──
-        bt_status = _find_job_status(job_status_map, "build-and-test", "build_test")
-        bt_log = await self._safe_fetch_log(run_id, "build-and-test")
-        ctest_pass, ctest_fail = _parse_ctest_summary(bt_log)
-        results["build_test"] = {
-            "status": bt_status,
-            "ctest_pass": ctest_pass,
-            "ctest_fail": ctest_fail,
-        }
-
-        # ── lua_lint: 解析语法错误数 ──
-        lint_status = _find_job_status(job_status_map, "lua-lint", "lua_lint")
-        lint_log = await self._safe_fetch_log(run_id, "lua-lint")
-        lint_errors = _parse_lua_lint_errors(lint_log)
-        results["lua_lint"] = {
-            "status": lint_status,
-            "errors": lint_errors,
-        }
-
-        # ── valgrind: 解析内存泄漏数 ──
-        vg_status = _find_job_status(
-            job_status_map, "memcheck", "valgrind", "memcheck"
-        )
-        vg_log = await self._safe_fetch_log(run_id, "memcheck")
-        vg_leaks = _parse_valgrind_leaks(vg_log)
-        results["valgrind"] = {
-            "status": vg_status,
-            "leaks": vg_leaks,
-        }
-
-        # ── smoke: 集群冒烟（build-and-test job 中的冒烟步骤） ──
-        results["smoke"] = {
-            "status": bt_status,  # 冒烟测试在 build-and-test job 内
+        # ctest/lint/valgrind 的详细数值无法获取（需日志解析，API 不可用）
+        results: dict = {
+            "build_test": {
+                "status": bt_status,
+                "ctest_pass": 0,  # 无法获取，需人工确认
+                "ctest_fail": 0,
+            },
+            "lua_lint": {
+                "status": lint_status,
+                "errors": 0,  # 无法获取，需人工确认
+            },
+            "valgrind": {
+                "status": vg_status,
+                "leaks": 0,  # 无法获取，需人工确认
+            },
+            "smoke": {
+                "status": smoke_status,
+            },
+            "note": (
+                "Gitee 免费版无法通过 API 获取 CI job 日志，"
+                "ctest/lua-lint/valgrind 的详细数值无法自动解析，需人工确认。"
+                f"CI 整体状态: {ci_status}。"
+                f"查看详情: https://gitee.com/{self.repo}/builds"
+            ),
         }
 
         return results
 
-    async def _safe_fetch_log(self, run_id: str, job_name: str) -> str:
-        """安全拉取日志，失败时返回空字符串。"""
-        try:
-            return await self.fetch_job_logs(run_id, job_name)
-        except Exception:
-            return ""
 
-
-# ── 日志解析辅助函数 ──
+# ── 日志解析辅助函数（保留，用于未来 API 可用时） ──
 
 # ctest 输出格式: "100% tests passed, 0 tests failed out of 18"
 _CTEST_PATTERN = re.compile(

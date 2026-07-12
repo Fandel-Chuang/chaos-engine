@@ -112,6 +112,8 @@ def _init_components(config: dict[str, Any], models_config: dict[str, Any]) -> d
     ci_trigger = CITrigger(
         gitee_token=ci_cfg.get("gitee_token", ""),
         repo=ci_cfg.get("repo", "zhong-fangdao/chaos-engine"),
+        chaos_engine_dir=chaos_dir,
+        trigger_branch=ci_cfg.get("trigger_branch", "master"),
     )
     admin_query = AdminQuery()
     screenshot = ScreenshotCapture()
