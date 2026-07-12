@@ -31,9 +31,9 @@ if not QQ_IMAP_CODE:
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPORT_DIR = os.path.join(PROJECT_DIR, ".ci-reports", "qq-mail-alerts")
-STATE_FILE = os.path.join(REPORT_DIR, "seen_state.json")
+STATE_FILE = os.path.join(REPORT_DIR, "notified_ids.json")
 
-# CI 失败邮件关键词
+# CI 失败邮件关键词（精确匹配主题和发件人）
 CI_FAIL_KEYWORDS = ['failed', 'failure', '失败', 'build failed',
                     'CI failed', 'run failed', 'workflow run']
 
@@ -75,22 +75,31 @@ def extract_body(msg):
     return body[:2000]
 
 
-def load_seen_state():
+def load_notified():
+    """加载已推送过的 CI 失败邮件 ID"""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE) as f:
-                return json.load(f)
+                data = json.load(f)
+                return set(data.get("notified_ids", []))
         except Exception:
             pass
-    return {"seen_ids": []}
+    return set()
 
 
-def save_seen_state(state):
+def save_notified(notified):
     os.makedirs(REPORT_DIR, exist_ok=True)
-    if len(state["seen_ids"]) > 200:
-        state["seen_ids"] = state["seen_ids"][-200:]
+    ids = list(notified)
+    if len(ids) > 200:
+        ids = ids[-200:]
     with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+        json.dump({"notified_ids": ids}, f, indent=2, ensure_ascii=False)
+
+
+def is_ci_fail_email(subject, from_hdr):
+    """判断是否为 CI 失败邮件"""
+    combined = (subject + " " + from_hdr).lower()
+    return any(k.lower() in combined for k in CI_FAIL_KEYWORDS)
 
 
 def main():
@@ -113,36 +122,40 @@ def main():
         if not mail_ids:
             return
 
+        # 检查最近 30 封
         recent_ids = mail_ids[-30:]
 
-        state = load_seen_state()
-        seen_ids = set(state.get("seen_ids", []))
+        notified = load_notified()
         new_alerts = []
 
         for mid in reversed(recent_ids):
             mid_str = mid.decode() if isinstance(mid, bytes) else str(mid)
-            if mid_str in seen_ids:
-                continue
 
-            status, msg_data = mail.fetch(mid, '(RFC822)')
+            # 先 fetch 信头，判断是否 CI 失败邮件
+            status, msg_data = mail.fetch(mid, '(BODY[HEADER.FIELDS (SUBJECT FROM DATE)])')
             if status != 'OK':
                 continue
 
             msg = email.message_from_bytes(msg_data[0][1])
             subject = decode_str(msg['Subject'])
             from_hdr = decode_str(msg['From'])
-            date_str = msg.get('Date', '')
 
-            # 只匹配 CI 失败邮件
-            combined = (subject + " " + from_hdr).lower()
-            is_ci_fail = any(k.lower() in combined for k in CI_FAIL_KEYWORDS)
-
-            seen_ids.add(mid_str)
-
-            if not is_ci_fail:
+            # 不是 CI 失败邮件就跳过（不记录 ID，不污染状态）
+            if not is_ci_fail_email(subject, from_hdr):
                 continue
 
-            body = extract_body(msg)
+            # 是 CI 失败邮件，但已经推送过了
+            if mid_str in notified:
+                continue
+
+            # 新的 CI 失败邮件！fetch 完整内容
+            status, full_data = mail.fetch(mid, '(RFC822)')
+            if status != 'OK':
+                continue
+            full_msg = email.message_from_bytes(full_data[0][1])
+            body = extract_body(full_msg)
+            date_str = full_msg.get('Date', '')
+
             new_alerts.append({
                 'mid': mid_str,
                 'subject': subject,
@@ -150,9 +163,9 @@ def main():
                 'date': date_str,
                 'body': body
             })
+            notified.add(mid_str)
 
-        state["seen_ids"] = list(seen_ids)
-        save_seen_state(state)
+        save_notified(notified)
 
         # 只有新 CI 失败邮件才输出（推送），否则静默
         if new_alerts:
