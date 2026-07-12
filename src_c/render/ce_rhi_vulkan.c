@@ -1095,6 +1095,18 @@ void rhi_poll_events(CeRhiDevice* dev) {
                     }
                     break;
                 }
+                case ConfigureNotify: {
+                    /* 窗口尺寸变化（含全屏切换）时重建 swapchain */
+                    int new_w = event.xconfigure.width;
+                    int new_h = event.xconfigure.height;
+                    if (new_w > 0 && new_h > 0 &&
+                        (new_w != dev->width || new_h != dev->height)) {
+                        CE_LOG_INFO("VULKAN", "Resize: %dx%d -> %dx%d",
+                                    dev->width, dev->height, new_w, new_h);
+                        rhi_resize(dev, new_w, new_h);
+                    }
+                    break;
+                }
             }
         }
 
