@@ -113,57 +113,63 @@ def main():
         sys.exit(1)
 
     try:
-        mail.select('INBOX')
-        status, messages = mail.search(None, 'ALL')
-        if status != 'OK':
-            sys.exit(1)
-
-        mail_ids = messages[0].split()
-        if not mail_ids:
-            return
-
-        # 检查最近 30 封
-        recent_ids = mail_ids[-30:]
-
         notified = load_notified()
         new_alerts = []
 
-        for mid in reversed(recent_ids):
-            mid_str = mid.decode() if isinstance(mid, bytes) else str(mid)
+        # 搜索 INBOX 和 GitHub 文件夹
+        # QQ 邮箱的 GitHub 文件夹使用 IMAP UTF-7 编码: &UXZO1mWHTvZZOQ-/github
+        folders = ['INBOX', '&UXZO1mWHTvZZOQ-/github']
 
-            # 先 fetch 信头，判断是否 CI 失败邮件
-            status, msg_data = mail.fetch(mid, '(BODY[HEADER.FIELDS (SUBJECT FROM DATE)])')
+        for folder in folders:
+            st, _ = mail.select(folder)
+            if st != 'OK':
+                continue
+            status, messages = mail.search(None, 'ALL')
             if status != 'OK':
                 continue
 
-            msg = email.message_from_bytes(msg_data[0][1])
-            subject = decode_str(msg['Subject'])
-            from_hdr = decode_str(msg['From'])
-
-            # 不是 CI 失败邮件就跳过（不记录 ID，不污染状态）
-            if not is_ci_fail_email(subject, from_hdr):
+            mail_ids = messages[0].split()
+            if not mail_ids:
                 continue
 
-            # 是 CI 失败邮件，但已经推送过了
-            if mid_str in notified:
-                continue
+            recent_ids = mail_ids[-30:] if len(mail_ids) > 30 else mail_ids
 
-            # 新的 CI 失败邮件！fetch 完整内容
-            status, full_data = mail.fetch(mid, '(RFC822)')
-            if status != 'OK':
-                continue
-            full_msg = email.message_from_bytes(full_data[0][1])
-            body = extract_body(full_msg)
-            date_str = full_msg.get('Date', '')
+            for mid in reversed(recent_ids):
+                mid_str = mid.decode() if isinstance(mid, bytes) else str(mid)
 
-            new_alerts.append({
-                'mid': mid_str,
-                'subject': subject,
-                'from': from_hdr,
-                'date': date_str,
-                'body': body
-            })
-            notified.add(mid_str)
+                # 先 fetch 信头，判断是否 CI 失败邮件
+                status, msg_data = mail.fetch(mid, '(BODY[HEADER.FIELDS (SUBJECT FROM DATE)])')
+                if status != 'OK':
+                    continue
+
+                msg = email.message_from_bytes(msg_data[0][1])
+                subject = decode_str(msg['Subject'])
+                from_hdr = decode_str(msg['From'])
+                date_str = msg.get('Date', '')
+
+                # 不是 CI 失败邮件就跳过（不记录 ID，不污染状态）
+                if not is_ci_fail_email(subject, from_hdr):
+                    continue
+
+                # 是 CI 失败邮件，但已经推送过了
+                if mid_str in notified:
+                    continue
+
+                # 新的 CI 失败邮件！fetch 完整内容
+                status, full_data = mail.fetch(mid, '(RFC822)')
+                if status != 'OK':
+                    continue
+                full_msg = email.message_from_bytes(full_data[0][1])
+                body = extract_body(full_msg)
+
+                new_alerts.append({
+                    'mid': mid_str,
+                    'subject': subject,
+                    'from': from_hdr,
+                    'date': date_str,
+                    'body': body
+                })
+                notified.add(mid_str)
 
         save_notified(notified)
 
