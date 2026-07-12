@@ -414,7 +414,14 @@ static int process_recv_buffer(CeClientNet* ctx) {
                 printf("[ClientNet] Received ENTITY_UPDATE: %d entities (total visible: %d)\n",
                        entities_in_msg, ctx->entity_count);
             } else if (msg_type == MSG_JOIN_RESPONSE) {
-                /* server 已分配实体 ID；当前客户端不依赖它，直接忽略即可 */
+                /* 服务端分配了实体 ID，更新本地 entity_id */
+                if (body_len >= 8) {
+                    /* body 格式: [4B result][4B assigned_entity_id] (大端) */
+                    uint32_t assigned_id = read_u32(ctx->recv_buf + 6 + 4);
+                    ctx->entity_id = assigned_id;
+                    printf("[ClientNet] Join confirmed, assigned entity_id=%u (result=%d, body_len=%u)\n",
+                           assigned_id, (int)read_u32(ctx->recv_buf + 6), body_len);
+                }
                 messages_received++;
                 ctx->msgs_recv++;
             }

@@ -33,13 +33,8 @@ typedef enum CeGameMsgType {
 
 /* ---- 协议头 ---- */
 
-/** 消息头: 所有消息的前 6 字节 */
-typedef struct CeGameMsgHeader {
-    uint32_t total_len;     /* 消息总长度（包含头） */
-    uint16_t msg_type;      /* CeGameMsgType */
-} CeGameMsgHeader;
-
-#define CE_GAME_HEADER_SIZE  ((int)sizeof(CeGameMsgHeader))
+/** 消息头: 所有消息的前 6 字节 [4B total_len][2B msg_type] */
+#define CE_GAME_HEADER_SIZE  6
 
 /* ---- 消息载荷 ---- */
 
