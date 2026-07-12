@@ -1,0 +1,18 @@
+# 模型定义 — id + 价格（元/百万 token）
+models:
+  flash:
+    id: deepseek-v4-flash-260425
+    input_price: 1.0
+    output_price: 2.0
+  glm:
+    id: glm-5-2-260617
+    input_price: 8.0
+    output_price: 28.0
+  pro:
+    id: deepseek-v4-pro-260425
+    input_price: 12.0
+    output_price: 24.0
+  qwen:
+    id: qwen3-14b-20250429
+    input_price: null
+    output_price: null

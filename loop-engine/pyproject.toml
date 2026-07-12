@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopengine"
+version = "0.1.0"
+description = "LoopEngine — 混沌引擎自动化闭环验证工具"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx",
+    "pyyaml",
+    "aiofiles",
+    "aiohttp",
+    "aiosqlite",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[project.scripts]
+loopengine = "loopengine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["loopengine*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,52 @@
+# LoopEngine 配置文件 — spec 7.3 节
+chaos_engine:
+  dir: /home/zhongfangdao/chaos-engine
+  build_dir: build
+
+ark:
+  api_key: ${ARK_API_KEY}
+  base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+
+model_routing:
+  dev.requirement_analysis: glm
+  dev.code_generation: pro
+  dev.simple_edit: flash
+  dev.compile_error_analysis: glm
+  test.failure_analysis: glm
+  test.lua_lint_fix: flash
+  verify.cluster_startup_analysis: glm
+  verify.data_consistency: pro
+  verify.api_validation: flash
+  client.title_bar_analysis: flash
+  client.vision_review: glm
+  client.render_error_analysis: pro
+
+vision:
+  mode: ark
+  model: glm-5-2-260617
+  max_daily_calls: 50
+  prompt_template: default
+
+cost:
+  daily_budget_cny: 10.0
+  per_loop_budget_cny: 2.0
+  flash_daily_limit: 500
+  vision_daily_limit: 50
+
+loops:
+  dev:
+    max_retries: 3
+    timeout_sec: 300
+  test:
+    max_retries: 3
+    timeout_sec: 300
+  verify:
+    max_retries: 3
+    timeout_sec: 120
+
+ci:
+  gitee_token: ${GITEE_API_TOKEN}
+  repo: zhong-fangdao/chaos-engine
+  trigger_branch: develop
+  poll_interval_sec: 15
+  timeout_sec: 1800
