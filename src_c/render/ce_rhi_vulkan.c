@@ -993,11 +993,13 @@ void rhi_resize(CeRhiDevice* dev, int width, int height) {
     vkDestroySwapchainKHR(dev->device, dev->swapchain, NULL);
     dev->swapchain = VK_NULL_HANDLE;
 
-    /* 按 swapchain -> render pass -> pipeline -> framebuffers 重建 */
+    /* 按 swapchain -> render pass -> pipeline -> framebuffers -> sync -> cmd 重建 */
     if (create_swapchain(dev) != VK_SUCCESS ||
         create_render_pass(dev) != VK_SUCCESS ||
         create_graphics_pipeline(dev) != VK_SUCCESS ||
-        create_framebuffers(dev) != VK_SUCCESS) {
+        create_framebuffers(dev) != VK_SUCCESS ||
+        create_sync_objects(dev) != VK_SUCCESS ||
+        create_command_buffers(dev) != VK_SUCCESS) {
         CE_LOG_ERROR("VULKAN", "Failed to rebuild swapchain resources");
         dev->frame_valid = CE_FALSE;
         return;
@@ -1457,6 +1459,13 @@ void rhi_destroy_pipeline(CeRhiDevice* dev, CeRhiPipeline* pipeline) {
 
 void rhi_begin_frame(CeRhiDevice* dev, CeColor clear_color) {
     uint32_t frame = dev->current_frame;
+
+    /* 如果上一帧标记了需要重建（ConfigureNotify 或 resize），跳过本帧 */
+    if (dev->swapchain == VK_NULL_HANDLE || !dev->in_flight_fences ||
+        !dev->command_buffers || !dev->image_available || !dev->render_finished) {
+        dev->frame_valid = CE_FALSE;
+        return;
+    }
 
     vkWaitForFences(dev->device, 1, &dev->in_flight_fences[frame], VK_TRUE, UINT64_MAX);
 
