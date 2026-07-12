@@ -42,9 +42,27 @@ if(NOT EXISTS "${X11_HEADERS_DIR}")
     endif()
 endif()
 
-# Lua 5.4 路径
+# Lua 5.4 路径：优先 third_party，回退系统包
 set(LUA_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/lua/include")
 set(LUA_LIB_DIR "${CMAKE_SOURCE_DIR}/third_party/lua/lib")
+set(LUA_LIB_FILE "${LUA_LIB_DIR}/liblua5.4.so")
+if(NOT EXISTS "${LUA_HEADERS_DIR}")
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(LUA lua5.4)
+    endif()
+    if(LUA_FOUND)
+        set(LUA_HEADERS_DIR "${LUA_INCLUDE_DIRS}")
+        set(LUA_LIB_FILE "")
+    else()
+        # 最后回退到系统默认路径
+        find_path(LUA_SYS_HEADER lua.h PATHS /usr/include/lua5.4)
+        if(LUA_SYS_HEADER)
+            set(LUA_HEADERS_DIR "${LUA_SYS_HEADER}")
+            set(LUA_LIB_FILE "lua5.4")
+        endif()
+    endif()
+endif()
 
 # 静态库目标
 add_library(engine_core STATIC ${ENGINE_CORE_SOURCES})
@@ -83,7 +101,7 @@ target_compile_options(engine_core PRIVATE
 if(WIN32)
     target_link_libraries(engine_core PRIVATE winmm)
 elseif(UNIX AND NOT APPLE)
-    target_link_libraries(engine_core PRIVATE m pthread dl ${LUA_LIB_DIR}/liblua5.4.so)
+    target_link_libraries(engine_core PRIVATE m pthread dl ${LUA_LIB_FILE})
 
     if(LINUX)
         # eBPF: Linux 5.x+ 自动启用
@@ -291,7 +309,7 @@ if(BUILD_POSIX_BENCH)
         $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration>
         $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic>
     )
-    target_link_libraries(engine_core_posix PRIVATE m pthread dl ${LUA_LIB_DIR}/liblua5.4.so)
+    target_link_libraries(engine_core_posix PRIVATE m pthread dl ${LUA_LIB_FILE})
     # eBPF support (same as engine_core)
     find_package(PkgConfig QUIET)
     if(PKG_CONFIG_FOUND)
