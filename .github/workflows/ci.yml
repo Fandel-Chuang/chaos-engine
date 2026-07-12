@@ -26,7 +26,8 @@ jobs:
           sudo apt-get install -y -qq \
             cmake build-essential \
             liblua5.4-dev liburing-dev libbpf-dev \
-            clang llvm luarocks xvfb xauth
+            clang llvm luarocks xvfb xauth \
+            libvulkan-dev libx11-dev
 
       - name: 安装 Lapis
         run: |
@@ -65,7 +66,8 @@ jobs:
           sudo apt-get install -y -qq \
             cmake build-essential \
             liblua5.4-dev liburing-dev libbpf-dev \
-            clang llvm
+            clang llvm \
+            libvulkan-dev libx11-dev
 
       - name: Release 编译
         run: |
@@ -120,7 +122,8 @@ jobs:
           sudo apt-get install -y -qq \
             cmake build-essential valgrind \
             liblua5.4-dev liburing-dev libbpf-dev \
-            clang llvm
+            clang llvm \
+            libvulkan-dev libx11-dev
 
       - name: 编译 (Debug)
         run: |

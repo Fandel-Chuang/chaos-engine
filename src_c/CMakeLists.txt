@@ -26,9 +26,21 @@ file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/public_api/*.h"
 )
 
-# Vulkan 头文件路径
+# Vulkan / X11 头文件路径：优先 third_party，回退系统包
 set(VULKAN_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/vulkan/include")
 set(X11_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/x11/include")
+if(NOT EXISTS "${VULKAN_HEADERS_DIR}")
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND)
+        set(VULKAN_HEADERS_DIR "")
+    endif()
+endif()
+if(NOT EXISTS "${X11_HEADERS_DIR}")
+    find_package(X11 QUIET)
+    if(X11_FOUND)
+        set(X11_HEADERS_DIR "")
+    endif()
+endif()
 
 # Lua 5.4 路径
 set(LUA_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/lua/include")
@@ -185,12 +197,18 @@ target_include_directories(chaos_client PRIVATE
 )
 target_link_libraries(chaos_client PRIVATE engine_core)
 
-# 链接 Vulkan 和 X11
+# 链接 Vulkan 和 X11：优先 third_party，回退系统包
 if(UNIX AND NOT APPLE)
-    target_link_libraries(chaos_client PRIVATE
-        ${CMAKE_SOURCE_DIR}/third_party/vulkan/lib/libvulkan.so.1
-        ${CMAKE_SOURCE_DIR}/third_party/x11/lib/libX11.so
-    )
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/vulkan/lib/libvulkan.so.1")
+        target_link_libraries(chaos_client PRIVATE
+            ${CMAKE_SOURCE_DIR}/third_party/vulkan/lib/libvulkan.so.1
+            ${CMAKE_SOURCE_DIR}/third_party/x11/lib/libX11.so
+        )
+    else()
+        find_package(Vulkan REQUIRED)
+        find_package(X11 REQUIRED)
+        target_link_libraries(chaos_client PRIVATE Vulkan::Vulkan X11::X11)
+    endif()
 elseif(WIN32)
     target_link_libraries(chaos_client PRIVATE vulkan-1)
 else()
