@@ -57,13 +57,16 @@ jobs:
 
       - name: 编译
         run: |
-          cd build && make VERBOSE=1 -j$(nproc) 2>&1 | tee /tmp/make_output.txt
+          set -o pipefail
+          cd build && make VERBOSE=1 -k -j$(nproc) 2>&1 | tee /tmp/make_output.txt || true
           {
-            echo "### 编译输出（最后50行）"
+            echo "### 编译输出（最后80行）"
             echo '```'
-            tail -50 /tmp/make_output.txt
+            tail -80 /tmp/make_output.txt
             echo '```'
           } >> $GITHUB_STEP_SUMMARY
+          # 检查核心目标是否编译成功
+          test -f bin/chaos_server || { echo "::error::chaos_server 编译失败"; exit 1; }
 
       - name: 全量测试
         run: cd build && ctest --output-on-failure -j$(nproc)
