@@ -38,6 +38,12 @@ jobs:
       - name: CMake 配置
         run: |
           mkdir -p build && cd build
+          echo "=== third_party 检查 ==="
+          ls -la ../third_party/lua/lib/ 2>/dev/null || echo "third_party/lua/lib 不存在"
+          ls -la ../third_party/vulkan/lib/ 2>/dev/null || echo "third_party/vulkan/lib 不存在"
+          file ../third_party/lua/lib/liblua5.4.so 2>/dev/null || echo "liblua5.4.so 不存在"
+          readlink -f ../third_party/lua/lib/liblua5.4.so 2>/dev/null || echo "readlink 失败"
+          echo "=== CMake 配置 ==="
           cmake .. -DCMAKE_BUILD_TYPE=Debug
 
       - name: 编译
