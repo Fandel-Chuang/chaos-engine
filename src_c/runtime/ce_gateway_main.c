@@ -22,7 +22,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+
+#ifdef _WIN32
+#include "core/ce_win_compat.h"
+#include <direct.h>
+#define getcwd _getcwd
+static char* win_dirname(const char* path) {
+    static char buf[256];
+    strncpy(buf, path, 255);
+    buf[255] = '\0';
+    char* s = strrchr(buf, '\\');
+    if (s) *s = '\0';
+    return buf;
+}
+#define dirname win_dirname
+#else
 #include <unistd.h>
+#include <libgen.h>
+#endif
 
 static void print_usage(const char* prog) {
     fprintf(stderr,

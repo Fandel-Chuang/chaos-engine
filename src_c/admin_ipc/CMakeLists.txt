@@ -10,5 +10,15 @@ target_include_directories(engine_admin_ipc PRIVATE
     ${CMAKE_SOURCE_DIR}/src_c
     ${CMAKE_SOURCE_DIR}/src_c/public_api
 )
-target_link_libraries(engine_admin_ipc PRIVATE engine_core engine_server pthread)
+if(WIN32)
+    set(_CE_COMPAT "${CMAKE_SOURCE_DIR}/src_c/core/ce_win_compat.h")
+    if(MSVC)
+        target_compile_options(engine_admin_ipc PRIVATE
+            /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS "/FI${_CE_COMPAT}"
+        )
+    endif()
+    target_link_libraries(engine_admin_ipc PRIVATE engine_core engine_server)
+else()
+    target_link_libraries(engine_admin_ipc PRIVATE engine_core engine_server pthread)
+endif()
 set_target_properties(engine_admin_ipc PROPERTIES LINKER_LANGUAGE C)

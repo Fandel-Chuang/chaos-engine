@@ -8,6 +8,22 @@
 
 #include "admin_ipc/ce_admin_ipc.h"
 
+#ifdef _WIN32
+
+/* Windows stub — Admin IPC uses Unix Domain Socket which is not
+ * available on Windows without WSL. All functions are no-ops. */
+
+CeAdminIpc* ce_admin_ipc_start(const char* addr) { (void)addr; return NULL; }
+void        ce_admin_ipc_stop(CeAdminIpc* ipc)   { (void)ipc; }
+CeResult    ce_admin_ipc_register_handler(CeAdminIpc* ipc,
+                                           CeAdminIpcHandler handler,
+                                           void* user_data) {
+    (void)ipc; (void)handler; (void)user_data;
+    return CE_OK;
+}
+
+#else /* POSIX implementation */
+
 #include "public_api/chaos_engine.h"
 #include "public_api/ce_ecs.h"
 #include "public_api/ce_log.h"
@@ -1452,3 +1468,5 @@ CeBool ce_admin_ipc_is_running(CeAdminIpc* ipc) {
     pthread_mutex_unlock(&ipc->mutex);
     return running;
 }
+
+#endif /* _WIN32 else */

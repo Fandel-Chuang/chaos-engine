@@ -78,6 +78,56 @@ if(NOT LUA_HEADERS_OK OR NOT LUA_LIB_OK)
 endif()
 message(STATUS "Lua: headers=${LUA_HEADERS_DIR} lib=${LUA_LIB_FILE}")
 
+# Windows POSIX compat header — define early so all targets can reference it
+set(CE_WIN_COMPAT_H "${CMAKE_CURRENT_SOURCE_DIR}/core/ce_win_compat.h")
+
+# Add compat_win stub headers to ALL targets on Windows
+# (provides stub unistd.h, libgen.h, sys/socket.h etc.)
+if(WIN32)
+    include_directories("${CMAKE_CURRENT_SOURCE_DIR}/compat_win")
+endif()
+
+# Find Lua library
+if(WIN32)
+    find_library(LUA_LIBRARY NAMES lua54 lua5.4 lua
+        HINTS
+            "${LUA_LIB_DIR}"
+            "$ENV{LUA_DIR}/lib"
+            "C:/Lua/lib"
+            "C:/Program Files/Lua/lib"
+        PATH_SUFFIXES lib
+    )
+    if(NOT LUA_LIBRARY)
+        find_package(Lua 5.4 QUIET)
+        if(Lua_FOUND)
+            set(LUA_LIBRARY ${LUA_LIBRARIES})
+            set(LUA_HEADERS_DIR ${LUA_INCLUDE_DIR})
+        else()
+            message(WARNING "Lua 5.4 library not found. Run install_deps.bat first.")
+            set(LUA_LIBRARY "")
+        endif()
+    endif()
+else()
+    set(LUA_LIBRARY "${LUA_LIB_DIR}/liblua5.4.so")
+endif()
+message(STATUS "Lua library: ${LUA_LIBRARY}")
+
+# Windows: 排除 Linux 专属文件，加入 Windows 平台实现
+if(WIN32)
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*/core/ce_platform\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*/core/ce_time\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*/network/ce_async_posix\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*/network/ce_async_uring\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*/network/ce_ebpf\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*/network/ce_network\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*/network/ce_rpc_call\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*/ebpf/.*\\.c$")
+    list(APPEND ENGINE_CORE_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/core/ce_platform_win.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/core/ce_time_win.c"
+    )
+endif()
+
 # 静态库目标
 add_library(engine_core STATIC ${ENGINE_CORE_SOURCES})
 
@@ -111,9 +161,19 @@ target_compile_options(engine_core PRIVATE
     $<$<C_COMPILER_ID:MSVC>:/W4>
 )
 
+# MSVC-specific flags (must use if(MSVC) — generator expressions don't propagate /FI reliably)
+if(MSVC)
+    target_compile_options(engine_core PRIVATE
+        /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS
+    )
+    target_compile_options(engine_core PRIVATE
+        "/FI${CE_WIN_COMPAT_H}"
+    )
+endif()
+
 # 链接系统库（平台相关）
 if(WIN32)
-    target_link_libraries(engine_core PRIVATE winmm)
+    target_link_libraries(engine_core PRIVATE winmm ws2_32)
 elseif(UNIX AND NOT APPLE)
     target_link_libraries(engine_core PRIVATE m pthread dl ${LUA_LIB_FILE})
 
@@ -129,11 +189,9 @@ elseif(UNIX AND NOT APPLE)
                 message(STATUS "eBPF: enabled (libbpf ${LIBBPF_VERSION})")
 
                 # ---- BPF 程序编译 (clang -target bpf) ----
-                # 共享的 BPF 编译选项
                 set(BPF_C_FLAGS -O2 -target bpf -I${CMAKE_CURRENT_SOURCE_DIR}/ebpf
                     -I/usr/include/x86_64-linux-gnu)
 
-                # XDP 包过滤 (Phase 4.1)
                 add_custom_command(
                     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_filter.bpf.o
                     COMMAND clang ${BPF_C_FLAGS}
@@ -144,7 +202,6 @@ elseif(UNIX AND NOT APPLE)
                     COMMENT "Compiling XDP filter BPF program"
                 )
 
-                # XDP 连接分发 (Phase 4.2)
                 add_custom_command(
                     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_dispatch.bpf.o
                     COMMAND clang ${BPF_C_FLAGS}
@@ -155,7 +212,6 @@ elseif(UNIX AND NOT APPLE)
                     COMMENT "Compiling XDP dispatch BPF program"
                 )
 
-                # 可观测性 BPF 程序 (已有)
                 add_custom_command(
                     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ce_ebpf_kern.bpf.o
                     COMMAND clang ${BPF_C_FLAGS}
@@ -165,7 +221,6 @@ elseif(UNIX AND NOT APPLE)
                     COMMENT "Compiling eBPF observability program"
                 )
 
-                # 聚合目标: 编译所有 BPF 程序
                 add_custom_target(bpf_programs ALL
                     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_filter.bpf.o
                             ${CMAKE_CURRENT_BINARY_DIR}/ce_xdp_dispatch.bpf.o
@@ -203,6 +258,13 @@ set_target_properties(engine_core PROPERTIES
 # 确保 FlatBuffers schema 在 engine_core 之前编译
 add_dependencies(engine_core chaos_fbs)
 
+# Windows: CE_WIN_FI — force-include flag for exe targets
+if(WIN32 AND MSVC)
+    set(CE_WIN_FI "/FI${CE_WIN_COMPAT_H}")
+else()
+    set(CE_WIN_FI "")
+endif()
+
 # ============================================================
 # 无头模式可执行文件（服务器 / 测试 / CI）
 # ============================================================
@@ -212,12 +274,27 @@ add_executable(chaos_headless
 target_include_directories(chaos_headless PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
+target_compile_options(chaos_headless PRIVATE ${CE_WIN_FI})
 target_link_libraries(chaos_headless PRIVATE engine_core)
 set_target_properties(chaos_headless PROPERTIES LINKER_LANGUAGE C)
 
 # ============================================================
-# Vulkan 客户端可执行文件
+# Vulkan 客户端可执行文件 (skipped on Windows if Vulkan SDK absent)
 # ============================================================
+if(WIN32)
+    find_library(VULKAN_LIB NAMES vulkan-1
+        HINTS "$ENV{VULKAN_SDK}/Lib" "$ENV{VULKAN_SDK}/lib" "C:/VulkanSDK/Lib"
+    )
+    if(NOT VULKAN_LIB AND DEFINED ENV{VULKAN_SDK})
+        set(VULKAN_LIB "$ENV{VULKAN_SDK}/Lib/vulkan-1.lib")
+    endif()
+else()
+    set(VULKAN_LIB "")
+endif()
+
+if(WIN32 AND NOT VULKAN_LIB)
+    message(STATUS "Vulkan SDK not found - skipping chaos_client/chaos_editor")
+else()
 add_executable(chaos_client
     runtime/ce_client_main.c
     runtime/ce_client_network.c
@@ -227,6 +304,7 @@ target_include_directories(chaos_client PRIVATE
     ${VULKAN_HEADERS_DIR}
     ${X11_HEADERS_DIR}
 )
+target_compile_options(chaos_client PRIVATE ${CE_WIN_FI})
 target_link_libraries(chaos_client PRIVATE engine_core)
 
 # 链接 Vulkan 和 X11：优先 third_party，回退系统包
@@ -247,15 +325,17 @@ if(UNIX AND NOT APPLE)
         endif()
     endif()
 elseif(WIN32)
-    target_link_libraries(chaos_client PRIVATE vulkan-1)
+    target_link_libraries(chaos_client PRIVATE "${VULKAN_LIB}")
 else()
     target_link_libraries(chaos_client PRIVATE vulkan)
 endif()
 set_target_properties(chaos_client PROPERTIES LINKER_LANGUAGE C)
+endif() # Vulkan found
 
 # ============================================================
-# 网络客户端测试
+# 网络客户端测试 (Linux/macOS only — uses POSIX sockets)
 # ============================================================
+if(NOT WIN32)
 add_executable(chaos_net_client
     runtime/ce_net_client_main.c
 )
@@ -264,10 +344,12 @@ target_include_directories(chaos_net_client PRIVATE
 )
 target_link_libraries(chaos_net_client PRIVATE engine_core)
 set_target_properties(chaos_net_client PROPERTIES LINKER_LANGUAGE C)
+endif()
 
 # ============================================================
-# io_uring 异步 Echo 服务器
+# io_uring 异步 Echo 服务器 (Linux only)
 # ============================================================
+if(NOT WIN32)
 add_executable(chaos_async_echo
     runtime/ce_async_echo_main.c
 )
@@ -276,10 +358,12 @@ target_include_directories(chaos_async_echo PRIVATE
 )
 target_link_libraries(chaos_async_echo PRIVATE engine_core)
 set_target_properties(chaos_async_echo PROPERTIES LINKER_LANGUAGE C)
+endif()
 
 # ============================================================
-# io_uring 异步 I/O 性能基准测试服务器
+# io_uring 异步 I/O 性能基准测试服务器 (Linux only)
 # ============================================================
+if(NOT WIN32)
 # 支持 2048 并发连接，可配置端口，静默模式
 add_executable(chaos_async_bench
     runtime/ce_async_bench_server.c
@@ -289,11 +373,12 @@ target_include_directories(chaos_async_bench PRIVATE
 )
 target_link_libraries(chaos_async_bench PRIVATE engine_core)
 set_target_properties(chaos_async_bench PROPERTIES LINKER_LANGUAGE C)
+endif()
 
 # POSIX-only 版本（强制禁用 io_uring，用于对比基准测试）
 # 用法: cmake -DBUILD_POSIX_BENCH=ON ..
 option(BUILD_POSIX_BENCH "Build POSIX-only benchmark server (no io_uring)" OFF)
-if(BUILD_POSIX_BENCH)
+if(BUILD_POSIX_BENCH AND NOT WIN32)
     # 收集除 ce_async_uring.c 之外的所有源文件
     file(GLOB_RECURSE ENGINE_CORE_POSIX_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/core/*.c"
@@ -367,8 +452,9 @@ add_subdirectory(sync)
 add_subdirectory(dbproxy)
 
 # ============================================================
-# TCP 回显服务器可执行文件
+# TCP 回显服务器可执行文件 (Linux only — uses io_uring/epoll)
 # ============================================================
+if(NOT WIN32)
 add_executable(chaos_server
     runtime/ce_server_main.c
 )
@@ -384,6 +470,7 @@ if(CHAOS_USE_IO_URING AND LIBURING_FOUND)
     target_include_directories(chaos_server PRIVATE ${LIBURING_INCLUDE_DIRS})
     target_link_libraries(chaos_server PRIVATE ${LIBURING_LIBRARIES})
 endif()
+endif() # NOT WIN32
 
 # ============================================================
 # Router 进程可执行文件 (Lua 驱动)
@@ -395,7 +482,8 @@ target_include_directories(chaos_router PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${LUA_HEADERS_DIR}
 )
-target_link_libraries(chaos_router PRIVATE engine_core)
+target_compile_options(chaos_router PRIVATE ${CE_WIN_FI})
+target_link_libraries(chaos_router PRIVATE engine_core ${LUA_LIBRARY})
 set_target_properties(chaos_router PROPERTIES LINKER_LANGUAGE C)
 
 # ============================================================
@@ -410,7 +498,8 @@ target_include_directories(chaos_gateway PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/gateway
     ${LUA_HEADERS_DIR}
 )
-target_link_libraries(chaos_gateway PRIVATE engine_core)
+target_compile_options(chaos_gateway PRIVATE ${CE_WIN_FI})
+target_link_libraries(chaos_gateway PRIVATE engine_core ${LUA_LIBRARY})
 set_target_properties(chaos_gateway PROPERTIES LINKER_LANGUAGE C)
 
 # 传递 io_uring 宏给 chaos_gateway (ce_gateway.c 需要)
@@ -430,7 +519,8 @@ target_include_directories(chaos_dbproxy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${LUA_HEADERS_DIR}
 )
-target_link_libraries(chaos_dbproxy PRIVATE engine_core)
+target_compile_options(chaos_dbproxy PRIVATE ${CE_WIN_FI})
+target_link_libraries(chaos_dbproxy PRIVATE engine_core ${LUA_LIBRARY})
 set_target_properties(chaos_dbproxy PROPERTIES LINKER_LANGUAGE C)
 
 # ============================================================

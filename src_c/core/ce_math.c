@@ -90,6 +90,13 @@ CeMat4 ce_mat4_identity(void) {
     return m;
 }
 
+/* near/far are Windows SDK macros — undef locally for this function */
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
 CeMat4 ce_mat4_perspective(float fov_y, float aspect, float near, float far) {
     CeMat4 m;
     memset(m.m, 0, sizeof(m.m));
