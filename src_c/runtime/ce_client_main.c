@@ -25,9 +25,9 @@ static void signal_handler(int sig) {
     g_running = 0;
 }
 
-/* 默认 Game Server 地址 */
+/* 默认 Gateway 地址 */
 static const char* g_gateway_host = "127.0.0.1";
-static int         g_gateway_port = 7777;
+static int         g_gateway_port = 9000;
 
 static void parse_args(int argc, char** argv, const char** host, int* port) {
     for (int i = 1; i < argc; i++) {

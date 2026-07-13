@@ -399,17 +399,26 @@ target_link_libraries(chaos_router PRIVATE engine_core)
 set_target_properties(chaos_router PROPERTIES LINKER_LANGUAGE C)
 
 # ============================================================
-# Gateway 进程可执行文件 (Lua 驱动)
+# Gateway 进程可执行文件 (io_uring 事件驱动)
 # ============================================================
 add_executable(chaos_gateway
     runtime/ce_gateway_main.c
+    gateway/ce_gateway.c
 )
 target_include_directories(chaos_gateway PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/gateway
     ${LUA_HEADERS_DIR}
 )
 target_link_libraries(chaos_gateway PRIVATE engine_core)
 set_target_properties(chaos_gateway PROPERTIES LINKER_LANGUAGE C)
+
+# 传递 io_uring 宏给 chaos_gateway (ce_gateway.c 需要)
+if(CHAOS_USE_IO_URING AND LIBURING_FOUND)
+    target_compile_definitions(chaos_gateway PRIVATE CHAOS_HAS_IO_URING)
+    target_include_directories(chaos_gateway PRIVATE ${LIBURING_INCLUDE_DIRS})
+    target_link_libraries(chaos_gateway PRIVATE ${LIBURING_LIBRARIES})
+endif()
 
 # ============================================================
 # DBProxy 进程可执行文件 (Lua 驱动)
@@ -428,6 +437,11 @@ set_target_properties(chaos_dbproxy PROPERTIES LINKER_LANGUAGE C)
 # Admin IPC 模块
 # ============================================================
 add_subdirectory(admin_ipc)
+
+# ============================================================
+# C Gateway 模块 (TCP epoll 接入 + 消息路由 + 后端转发)
+# ============================================================
+add_subdirectory(gateway)
 
 # ============================================================
 # 存档模块
