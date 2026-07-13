@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <time.h>
+#include <ctype.h>
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -79,6 +80,257 @@ uint32_t ce_gateway_read_u32(const uint8_t* buf) {
 
 uint16_t ce_gateway_read_u16(const uint8_t* buf) {
     return (uint16_t)(((uint16_t)buf[0] << 8) | (uint16_t)buf[1]);
+}
+
+/* ================================================================
+ * SHA1 + Base64 (纯 C99，不依赖 OpenSSL)
+ * ================================================================ */
+
+/* SHA1 上下文 */
+typedef struct {
+    uint32_t h[5];        /* 状态 */
+    uint64_t total_bits;  /* 总比特数 */
+    uint8_t  buf[64];     /* 输入缓冲区 */
+    int      buf_len;     /* 缓冲区当前长度 */
+} ce_sha1_ctx;
+
+#define SHA1_ROL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+
+static void sha1_init(ce_sha1_ctx* c) {
+    c->h[0] = 0x67452301;
+    c->h[1] = 0xEFCDAB89;
+    c->h[2] = 0x98BADCFE;
+    c->h[3] = 0x10325476;
+    c->h[4] = 0xC3D2E1F0;
+    c->total_bits = 0;
+    c->buf_len = 0;
+}
+
+static void sha1_process_block(ce_sha1_ctx* c, const uint8_t* block) {
+    uint32_t w[80];
+    for (int i = 0; i < 16; i++) {
+        w[i] = ((uint32_t)block[i * 4] << 24)
+             | ((uint32_t)block[i * 4 + 1] << 16)
+             | ((uint32_t)block[i * 4 + 2] << 8)
+             |  (uint32_t)block[i * 4 + 3];
+    }
+    for (int i = 16; i < 80; i++) {
+        w[i] = SHA1_ROL(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    }
+
+    uint32_t a = c->h[0], b = c->h[1], cc = c->h[2], d = c->h[3], e = c->h[4];
+    uint32_t f, k;
+    for (int i = 0; i < 80; i++) {
+        if (i < 20) {
+            f = (b & cc) | ((~b) & d);
+            k = 0x5A827999;
+        } else if (i < 40) {
+            f = b ^ cc ^ d;
+            k = 0x6ED9EBA1;
+        } else if (i < 60) {
+            f = (b & cc) | (b & d) | (cc & d);
+            k = 0x8F1BBCDC;
+        } else {
+            f = b ^ cc ^ d;
+            k = 0xCA62C1D6;
+        }
+        uint32_t temp = SHA1_ROL(a, 5) + f + e + k + w[i];
+        e = d;
+        d = cc;
+        cc = SHA1_ROL(b, 30);
+        b = a;
+        a = temp;
+    }
+    c->h[0] += a;
+    c->h[1] += b;
+    c->h[2] += cc;
+    c->h[3] += d;
+    c->h[4] += e;
+}
+
+static void sha1_update(ce_sha1_ctx* c, const uint8_t* data, size_t len) {
+    c->total_bits += (uint64_t)len * 8;
+    while (len > 0) {
+        int copy = 64 - c->buf_len;
+        if ((size_t)copy > len) copy = (int)len;
+        memcpy(c->buf + c->buf_len, data, (size_t)copy);
+        c->buf_len += copy;
+        data += copy;
+        len -= copy;
+        if (c->buf_len == 64) {
+            sha1_process_block(c, c->buf);
+            c->buf_len = 0;
+        }
+    }
+}
+
+static void sha1_final(ce_sha1_ctx* c, uint8_t out[20]) {
+    /* 补 0x80 */
+    c->buf[c->buf_len++] = 0x80;
+    /* 补 0 到 len ≡ 56 (mod 64) */
+    if (c->buf_len > 56) {
+        while (c->buf_len < 64) c->buf[c->buf_len++] = 0;
+        sha1_process_block(c, c->buf);
+        c->buf_len = 0;
+    }
+    while (c->buf_len < 56) c->buf[c->buf_len++] = 0;
+    /* 追加 8 字节大端序原始长度 */
+    c->buf[56] = (uint8_t)(c->total_bits >> 56);
+    c->buf[57] = (uint8_t)(c->total_bits >> 48);
+    c->buf[58] = (uint8_t)(c->total_bits >> 40);
+    c->buf[59] = (uint8_t)(c->total_bits >> 32);
+    c->buf[60] = (uint8_t)(c->total_bits >> 24);
+    c->buf[61] = (uint8_t)(c->total_bits >> 16);
+    c->buf[62] = (uint8_t)(c->total_bits >> 8);
+    c->buf[63] = (uint8_t)(c->total_bits);
+    sha1_process_block(c, c->buf);
+
+    for (int i = 0; i < 5; i++) {
+        out[i * 4]     = (uint8_t)(c->h[i] >> 24);
+        out[i * 4 + 1] = (uint8_t)(c->h[i] >> 16);
+        out[i * 4 + 2] = (uint8_t)(c->h[i] >> 8);
+        out[i * 4 + 3] = (uint8_t)(c->h[i]);
+    }
+}
+
+/** 一次性 SHA1 计算 */
+static void sha1(const uint8_t* data, size_t len, uint8_t out[20]) {
+    ce_sha1_ctx c;
+    sha1_init(&c);
+    sha1_update(&c, data, len);
+    sha1_final(&c, out);
+}
+
+static const char BASE64_TABLE[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/** Base64 编码 (out 需要至少 ceil(len/3)*4 + 1 字节) */
+static void base64_encode(const uint8_t* data, size_t len, char* out) {
+    int oi = 0;
+    size_t i;
+    for (i = 0; i + 2 < len; i += 3) {
+        uint32_t v = ((uint32_t)data[i] << 16) | ((uint32_t)data[i + 1] << 8) | data[i + 2];
+        out[oi++] = BASE64_TABLE[(v >> 18) & 0x3F];
+        out[oi++] = BASE64_TABLE[(v >> 12) & 0x3F];
+        out[oi++] = BASE64_TABLE[(v >> 6) & 0x3F];
+        out[oi++] = BASE64_TABLE[v & 0x3F];
+    }
+    if (i < len) {
+        uint32_t v = (uint32_t)data[i] << 16;
+        if (i + 1 < len) v |= (uint32_t)data[i + 1] << 8;
+        out[oi++] = BASE64_TABLE[(v >> 18) & 0x3F];
+        out[oi++] = BASE64_TABLE[(v >> 12) & 0x3F];
+        out[oi++] = (i + 1 < len) ? BASE64_TABLE[(v >> 6) & 0x3F] : '=';
+        out[oi++] = '=';
+    }
+    out[oi] = '\0';
+}
+
+/* ================================================================
+ * WebSocket 帧编解码
+ * ================================================================ */
+
+/* WebSocket opcodes (RFC 6455) */
+#define WS_OPCODE_CONTINUATION  0x0
+#define WS_OPCODE_TEXT          0x1
+#define WS_OPCODE_BINARY        0x2
+#define WS_OPCODE_CLOSE         0x8
+#define WS_OPCODE_PING          0x9
+#define WS_OPCODE_PONG          0xA
+
+/**
+ * 解析 WebSocket 帧
+ * @param buf      接收缓冲区
+ * @param len      缓冲区数据长度
+ * @param fin      [out] FIN 标志
+ * @param opcode   [out] 操作码
+ * @param payload  [out] 指向 payload 的指针 (已 unmask)
+ * @param payload_len [out] payload 长度
+ * @return >0 成功(帧总长度), 0 数据不完整, <0 错误
+ */
+static int ws_parse_frame(const uint8_t* buf, int len,
+                          int* fin, int* opcode,
+                          const uint8_t** payload, int* payload_len) {
+    if (len < 2) return 0;
+
+    *fin = (buf[0] >> 7) & 1;
+    *opcode = buf[0] & 0x0F;
+
+    int masked = (buf[1] >> 7) & 1;
+    int plen = buf[1] & 0x7F;
+
+    int header_len = 2;
+
+    if (plen == 126) {
+        if (len < 4) return 0;
+        plen = (buf[2] << 8) | buf[3];
+        header_len = 4;
+    } else if (plen == 127) {
+        if (len < 10) return 0;
+        /* 只取低 32 位 (足够游戏网关场景) */
+        plen = (buf[6] << 24) | (buf[7] << 16) | (buf[8] << 8) | buf[9];
+        header_len = 10;
+    }
+
+    if (masked) header_len += 4;
+
+    if (len < header_len + plen) return 0; /* 数据不完整 */
+
+    /* unmask payload (原地修改, recv_buf 是可写的) */
+    if (masked) {
+        uint8_t mask[4];
+        memcpy(mask, buf + header_len - 4, 4);
+        uint8_t* p = (uint8_t*)buf + header_len;
+        for (int i = 0; i < plen; i++) {
+            p[i] ^= mask[i % 4];
+        }
+    }
+
+    *payload = buf + header_len;
+    *payload_len = plen;
+    return header_len + plen;
+}
+
+/**
+ * 封装 WebSocket 帧 (服务端发送, 不 mask)
+ * @param payload     数据
+ * @param payload_len 数据长度
+ * @param opcode      操作码
+ * @param out         输出缓冲区
+ * @param out_max     输出缓冲区大小
+ * @return >0 帧总长度, <0 错误
+ */
+static int ws_pack_frame(const uint8_t* payload, int payload_len,
+                         int opcode, uint8_t* out, int out_max) {
+    int header_len;
+    if (payload_len < 126) {
+        header_len = 2;
+    } else if (payload_len <= 65535) {
+        header_len = 4;
+    } else {
+        header_len = 10;
+    }
+
+    if (header_len + payload_len > out_max) return -1;
+
+    out[0] = (uint8_t)(0x80 | opcode); /* FIN=1 */
+    if (payload_len < 126) {
+        out[1] = (uint8_t)payload_len;
+    } else if (payload_len <= 65535) {
+        out[1] = 126;
+        out[2] = (uint8_t)(payload_len >> 8);
+        out[3] = (uint8_t)(payload_len & 0xFF);
+    } else {
+        out[1] = 127;
+        memset(out + 2, 0, 8);
+        out[9] = (uint8_t)(payload_len & 0xFF);
+        out[8] = (uint8_t)((payload_len >> 8) & 0xFF);
+        out[7] = (uint8_t)((payload_len >> 16) & 0xFF);
+        out[6] = (uint8_t)((payload_len >> 24) & 0xFF);
+    }
+
+    memcpy(out + header_len, payload, (size_t)payload_len);
+    return header_len + payload_len;
 }
 
 /* ================================================================
@@ -226,6 +478,7 @@ static CeGatewayConn* conn_create(int fd, uint64_t conn_id) {
     conn->recv_pending = CE_FALSE;
     conn->protocol = CE_GW_PROTO_TCP;  /* 默认 TCP */
     conn->kcp_ctx = NULL;
+    conn->ws_state = 0;  /* 0=等待握手判断 */
 
     return conn;
 }
@@ -507,10 +760,154 @@ static void connect_backends(CeGateway* gw) {
 }
 
 /* ================================================================
+ * WebSocket 握手
+ * ================================================================ */
+
+/** 查找子字符串 (大小写不敏感) */
+static char* ci_strstr(const char* haystack, const char* needle) {
+    if (!haystack || !needle) return NULL;
+    size_t nl = strlen(needle);
+    if (nl == 0) return (char*)haystack;
+    const char* p = haystack;
+    while (*p) {
+        size_t i = 0;
+        while (i < nl && p[i] && (p[i] == needle[i] || tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])))
+            i++;
+        if (i == nl) return (char*)p;
+        p++;
+    }
+    return NULL;
+}
+
+/**
+ * 尝试 WebSocket 握手
+ * @param conn  连接 (recv_buf 中有数据, recv_offset 是长度)
+ * @param gw    Gateway 实例 (用于提交 async send)
+ * @return 1=握手成功, 0=数据不完整(继续等), -1=不是WebSocket(当TCP处理)
+ */
+static int try_ws_handshake(CeGatewayConn* conn, CeGateway* gw) {
+    if (conn->recv_offset < 4) return 0;
+
+    /* 检查是否以 "GET " 开头 (HTTP 请求) */
+    if (memcmp(conn->recv_buf, "GET ", 4) != 0) {
+        conn->ws_state = -1; /* 不是 WebSocket */
+        conn->protocol = CE_GW_PROTO_TCP;
+        return -1;
+    }
+
+    /* 检查是否有完整的 HTTP 头 (\r\n\r\n) */
+    char* end = NULL;
+    for (int i = 0; i <= conn->recv_offset - 4; i++) {
+        if (memcmp(conn->recv_buf + i, "\r\n\r\n", 4) == 0) {
+            end = (char*)(conn->recv_buf + i);
+            break;
+        }
+    }
+    if (!end) return 0; /* 握手数据不完整 */
+
+    /* 解析 Sec-WebSocket-Key (大小写不敏感) */
+    char* key = ci_strstr((char*)conn->recv_buf, "Sec-WebSocket-Key:");
+    if (!key) return -1; /* 不是合法的 WebSocket 请求 */
+    key += strlen("Sec-WebSocket-Key:");
+    /* 跳过空格 */
+    while (*key == ' ' || *key == '\t') key++;
+
+    char* key_end = strstr(key, "\r\n");
+    if (!key_end) return -1;
+
+    int key_len = (int)(key_end - key);
+    char client_key[128];
+    if (key_len >= (int)sizeof(client_key)) key_len = (int)sizeof(client_key) - 1;
+    memcpy(client_key, key, (size_t)key_len);
+    client_key[key_len] = '\0';
+
+    /* 去除尾部空白 */
+    while (key_len > 0 && (client_key[key_len - 1] == ' ' || client_key[key_len - 1] == '\r' || client_key[key_len - 1] == '\n')) {
+        client_key[--key_len] = '\0';
+    }
+
+    /* 计算 Sec-WebSocket-Accept = base64(sha1(client_key + magic)) */
+    const char* magic = CE_GW_WS_MAGIC;
+    size_t magic_len = strlen(magic);
+    size_t ck_len = strlen(client_key);
+    size_t combined_len = ck_len + magic_len;
+
+    /* 构造 combined 缓冲区 (栈上) */
+    char combined[256];
+    if (combined_len >= sizeof(combined)) {
+        CE_LOG_WARN("GATEWAY", "WS handshake: key too long (%zu)", ck_len);
+        return -1;
+    }
+    memcpy(combined, client_key, ck_len);
+    memcpy(combined + ck_len, magic, magic_len);
+
+    /* SHA1 */
+    uint8_t sha1_out[20];
+    sha1((const uint8_t*)combined, combined_len, sha1_out);
+
+    /* Base64 */
+    char accept_value[64];
+    base64_encode(sha1_out, 20, accept_value);
+
+    /* 构造 101 响应 (使用 send_buf 避免栈悬空) */
+    char response[512];
+    int resp_len = snprintf(response, sizeof(response),
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: %s\r\n"
+        "\r\n", accept_value);
+
+    if (resp_len < 0 || resp_len >= (int)sizeof(response)) {
+        CE_LOG_ERROR("GATEWAY", "WS handshake response too long");
+        return -1;
+    }
+
+    /* 将响应拷贝到 send_buf (io_uring 异步发送，不能使用栈缓冲区) */
+    if (resp_len > CE_GW_SEND_BUF_SIZE) {
+        CE_LOG_ERROR("GATEWAY", "WS handshake response exceeds send buffer");
+        return -1;
+    }
+    memcpy(conn->send_buf, response, (size_t)resp_len);
+    ce_async_send(gw->io, conn->fd, conn->send_buf, resp_len, conn);
+
+    conn->ws_state = 1;   /* 握手完成 */
+    conn->protocol = CE_GW_PROTO_WS;
+
+    CE_LOG_INFO("GATEWAY", "WebSocket handshake completed (conn_id=%llu, fd=%d)",
+                (unsigned long long)conn->conn_id, conn->fd);
+
+    /* 清空握手缓冲区，后续数据走 WS 帧解析 */
+    conn->recv_offset = 0;
+
+    return 1;
+}
+
+/**
+ * 发送 WebSocket 帧 (自动封装帧头)
+ * @param gw    Gateway 实例
+ * @param conn  连接
+ * @param data  payload 数据 (协议帧 [4B total_len][2B msg_type][N payload])
+ * @param len   payload 长度
+ * @param opcode WS 操作码 (0x1=文本, 0x2=二进制)
+ */
+static void ws_send_frame(CeGateway* gw, CeGatewayConn* conn,
+                          const uint8_t* data, int len, int opcode) {
+    /* 使用 send_buf 封装 WS 帧 (帧头最大 10 字节) */
+    int frame_len = ws_pack_frame(data, len, opcode, conn->send_buf, CE_GW_SEND_BUF_SIZE);
+    if (frame_len < 0) {
+        CE_LOG_ERROR("GATEWAY", "WS pack frame failed (len=%d, buf=%d)",
+                     len, CE_GW_SEND_BUF_SIZE);
+        return;
+    }
+    ce_async_send(gw->io, conn->fd, conn->send_buf, frame_len, conn);
+}
+
+/* ================================================================
  * 消息处理
  * ================================================================ */
 
-/** 向客户端发送数据 (自动区分 TCP/KCP) */
+/** 向客户端发送数据 (自动区分 TCP/KCP/WS) */
 static void gw_send_to_conn(CeGateway* gw, CeGatewayConn* conn,
                             const uint8_t* data, int len) {
     if (conn->protocol == CE_GW_PROTO_KCP && conn->kcp_ctx) {
@@ -523,6 +920,9 @@ static void gw_send_to_conn(CeGateway* gw, CeGatewayConn* conn,
         /* 驱动 KCP 状态机以尽快发送 */
         uint32_t now_ms = (uint32_t)(gw_now_us() / 1000ULL);
         ce_kcp_update(conn->kcp_ctx, now_ms);
+    } else if (conn->protocol == CE_GW_PROTO_WS && conn->ws_state == 1) {
+        /* WebSocket：封装成 WS 帧再发送 (二进制帧) */
+        ws_send_frame(gw, conn, data, len, WS_OPCODE_BINARY);
     } else {
         /* TCP 连接：通过 io_uring 异步发送 */
         ce_async_send(gw->io, conn->fd, data, len, conn);
@@ -607,6 +1007,78 @@ static void handle_message(CeGateway* gw, CeGatewayConn* conn,
 static void process_recv_data(CeGateway* gw, CeGatewayConn* conn, int nbytes) {
     conn->recv_offset += nbytes;
 
+    /* ---- 新连接：判断是否为 WebSocket ---- */
+    /* ws_state==0 表示尚未判断协议，protocol==TCP 表示新 TCP 连接 (排除 KCP) */
+    if (conn->ws_state == 0 && conn->protocol == CE_GW_PROTO_TCP && gw->ws_enabled) {
+        int ret = try_ws_handshake(conn, gw);
+        if (ret == 0) {
+            /* 握手数据不完整，继续等 recv (不处理消息) */
+            return;
+        }
+        if (ret > 0) {
+            /* WebSocket 握手成功，后续走 WS 帧解析
+             * recv_offset 已被清零，重新提交 recv 由事件循环处理 */
+            return;
+        }
+        /* ret < 0: 不是 WebSocket，当纯 TCP 处理 (已设 protocol=TCP, ws_state=-1)
+         * 继续走下面的 TCP 协议帧解析 (recv_buf 中有已接收数据) */
+    }
+
+    /* ---- WebSocket 帧解析 (握手完成后) ---- */
+    if (conn->protocol == CE_GW_PROTO_WS && conn->ws_state == 1) {
+        /* 循环解析所有完整 WS 帧 */
+        while (conn->recv_offset >= 2) {
+            int fin, opcode;
+            const uint8_t* payload;
+            int payload_len;
+            int consumed = ws_parse_frame(conn->recv_buf, conn->recv_offset,
+                                          &fin, &opcode, &payload, &payload_len);
+            if (consumed == 0) break; /* 数据不完整 */
+
+            /* 处理 WS 帧 */
+            switch (opcode) {
+            case WS_OPCODE_TEXT:
+            case WS_OPCODE_BINARY:
+                /* payload 就是协议帧 [4B total_len][2B msg_type][N payload] */
+                if (payload_len > 0) {
+                    handle_message(gw, conn, payload, payload_len);
+                }
+                break;
+            case WS_OPCODE_CLOSE:
+                CE_LOG_INFO("GATEWAY", "WS close frame from conn=%llu",
+                            (unsigned long long)conn->conn_id);
+                conn->state = CE_GW_CONN_CLOSING;
+                break;
+            case WS_OPCODE_PING:
+                /* 回 PONG (使用相同 payload) */
+                ws_send_frame(gw, conn, payload, payload_len, WS_OPCODE_PONG);
+                CE_LOG_DEBUG("GATEWAY", "WS PING from conn=%llu, sent PONG",
+                             (unsigned long long)conn->conn_id);
+                break;
+            case WS_OPCODE_PONG:
+                /* 心跳响应，活跃时间已在调用处更新 */
+                CE_LOG_TRACE("GATEWAY", "WS PONG from conn=%llu",
+                             (unsigned long long)conn->conn_id);
+                break;
+            default:
+                CE_LOG_WARN("GATEWAY", "WS unknown opcode=0x%X from conn=%llu",
+                            opcode, (unsigned long long)conn->conn_id);
+                break;
+            }
+
+            /* 移动剩余数据 */
+            int remaining = conn->recv_offset - consumed;
+            if (remaining > 0) {
+                memmove(conn->recv_buf, conn->recv_buf + consumed, (size_t)remaining);
+            }
+            conn->recv_offset = remaining;
+
+            if (conn->state == CE_GW_CONN_CLOSING) break;
+        }
+        return;
+    }
+
+    /* ---- TCP/KCP 协议帧解析 (原有逻辑) ---- */
     /* 循环解析所有完整消息 */
     while (conn->recv_offset >= CE_GW_HEADER_SIZE) {
         uint32_t total_len = ce_gateway_read_u32(conn->recv_buf);
@@ -738,10 +1210,12 @@ static void close_conn(CeGateway* gw, int slot) {
                     (unsigned long long)conn->conn_id, conn->kcp_conv, conn->addr);
         /* KCP 连接共用 kcp_fd，不能关闭它，只销毁 KCP 上下文和连接对象 */
     } else {
-        CE_LOG_INFO("GATEWAY", "Closing TCP conn %llu (fd=%d)",
-                    (unsigned long long)conn->conn_id, conn->fd);
+        /* TCP 或 WebSocket 连接，各有独立 fd */
+        const char* proto_name = (conn->protocol == CE_GW_PROTO_WS) ? "WS" : "TCP";
+        CE_LOG_INFO("GATEWAY", "Closing %s conn %llu (fd=%d)",
+                    proto_name, (unsigned long long)conn->conn_id, conn->fd);
 
-        /* 异步关闭 fd (仅 TCP 连接) */
+        /* 异步关闭 fd (仅 TCP/WS 连接) */
         if (conn->fd >= 0) {
             ce_async_close(gw->io, conn->fd);
             conn->fd = -1;
@@ -769,6 +1243,7 @@ CeGateway* ce_gateway_create(const CeGatewayConfig* config) {
     gw->heartbeat_interval_ms = config ? config->heartbeat_interval_ms : CE_GW_HEARTBEAT_INTERVAL_MS;
     gw->heartbeat_timeout_ms = config ? config->heartbeat_timeout_ms : CE_GW_HEARTBEAT_TIMEOUT_MS;
     gw->kcp_enabled = config ? config->kcp_enabled : 1;  /* 默认启用 KCP */
+    gw->ws_enabled = config ? config->ws_enabled : 1;   /* 默认启用 WebSocket */
 
     if (gw->max_conns <= 0) gw->max_conns = CE_GW_DEFAULT_MAX_CONNS;
     if (gw->heartbeat_interval_ms <= 0) gw->heartbeat_interval_ms = CE_GW_HEARTBEAT_INTERVAL_MS;
@@ -830,8 +1305,9 @@ CeGateway* ce_gateway_create(const CeGatewayConfig* config) {
         }
     }
 
-    CE_LOG_INFO("GATEWAY", "Gateway created: port=%d, max_conns=%d, kcp=%s, backend=%s, queue_depth=%d",
+    CE_LOG_INFO("GATEWAY", "Gateway created: port=%d, max_conns=%d, kcp=%s, ws=%s, backend=%s, queue_depth=%d",
                 gw->port, gw->max_conns, gw->kcp_enabled ? "on" : "off",
+                gw->ws_enabled ? "on" : "off",
                 ce_async_backend_name(), CE_GW_QUEUE_DEPTH);
 
     return gw;
@@ -840,10 +1316,12 @@ CeGateway* ce_gateway_create(const CeGatewayConfig* config) {
 void ce_gateway_destroy(CeGateway* gw) {
     if (!gw) return;
 
-    /* 关闭所有连接 (KCP 连接不关闭共享的 kcp_fd) */
+    /* 关闭所有连接 (KCP 连接不关闭共享的 kcp_fd; TCP/WS 连接关闭各自的 fd) */
     for (int i = 0; i < gw->conn_capacity; i++) {
         if (gw->conns[i]) {
-            if (gw->conns[i]->protocol == CE_GW_PROTO_TCP && gw->conns[i]->fd >= 0) {
+            if ((gw->conns[i]->protocol == CE_GW_PROTO_TCP ||
+                 gw->conns[i]->protocol == CE_GW_PROTO_WS) &&
+                gw->conns[i]->fd >= 0) {
                 close(gw->conns[i]->fd);
             }
             conn_destroy(gw->conns[i]);
@@ -919,8 +1397,9 @@ CeResult ce_gateway_run(CeGateway* gw) {
         gw->kcp_recv_pending = CE_TRUE;
     }
 
-    CE_LOG_INFO("GATEWAY", "Gateway event loop started (backend=%s, kcp=%s)",
-                ce_async_backend_name(), gw->kcp_enabled ? "on" : "off");
+    CE_LOG_INFO("GATEWAY", "Gateway event loop started (backend=%s, kcp=%s, ws=%s)",
+                ce_async_backend_name(), gw->kcp_enabled ? "on" : "off",
+                gw->ws_enabled ? "on" : "off");
 
     /* ==================== 主事件循环 ==================== */
     while (gw->running && !g_stop_flag) {
@@ -1143,10 +1622,12 @@ CeResult ce_gateway_run(CeGateway* gw) {
 
     CE_LOG_INFO("GATEWAY", "Gateway event loop stopped");
 
-    /* 优雅关闭：关闭所有客户端连接 (TCP 关闭 fd, KCP 只销毁上下文) */
+    /* 优雅关闭：关闭所有客户端连接 (TCP/WS 关闭 fd, KCP 只销毁上下文) */
     for (int i = 0; i < gw->conn_capacity; i++) {
         if (gw->conns[i]) {
-            if (gw->conns[i]->protocol == CE_GW_PROTO_TCP && gw->conns[i]->fd >= 0) {
+            if ((gw->conns[i]->protocol == CE_GW_PROTO_TCP ||
+                 gw->conns[i]->protocol == CE_GW_PROTO_WS) &&
+                gw->conns[i]->fd >= 0) {
                 ce_async_close(gw->io, gw->conns[i]->fd);
                 gw->conns[i]->fd = -1;
             }
