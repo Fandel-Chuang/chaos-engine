@@ -114,6 +114,8 @@ def _init_components(config: dict[str, Any], models_config: dict[str, Any]) -> d
         repo=ci_cfg.get("repo", "zhong-fangdao/chaos-engine"),
         chaos_engine_dir=chaos_dir,
         trigger_branch=ci_cfg.get("trigger_branch", "master"),
+        github_token=ci_cfg.get("github_token", ""),
+        github_repo=ci_cfg.get("github_repo", ""),
     )
     admin_query = AdminQuery()
     screenshot = ScreenshotCapture()

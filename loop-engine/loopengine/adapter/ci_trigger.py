@@ -42,6 +42,8 @@ class CITrigger:
         repo: str = "zhong-fangdao/chaos-engine",
         chaos_engine_dir: str = "/home/zhongfangdao/chaos-engine",
         trigger_branch: str = "master",
+        github_token: str = "",
+        github_repo: str = "",
     ) -> None:
         """初始化 CI 触发器。
 
@@ -50,12 +52,17 @@ class CITrigger:
             repo: 仓库全名（owner/repo）。
             chaos_engine_dir: ChaosEngine 项目根目录（git 仓库路径），用于执行 git 命令。
             trigger_branch: 默认触发分支。
+            github_token: GitHub API 访问令牌（可选，用于 GitHub Actions CI）。
+            github_repo: GitHub 仓库全名（owner/repo，可选）。
         """
         self.gitee_token = gitee_token
         self.repo = repo
         self.chaos_engine_dir = chaos_engine_dir
         self.trigger_branch = trigger_branch
         self.api_base = self.API_BASE
+        self.github_token = github_token
+        self.github_repo = github_repo
+        self.use_github = bool(github_token and github_repo)
 
     def _headers(self) -> dict[str, str]:
         """构建请求头。"""
@@ -88,6 +95,30 @@ class CITrigger:
         """
         branch = branch or self.trigger_branch
 
+        if self.use_github:
+            commit_msg = "loopengine: trigger CI"
+            commit_proc = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "commit", "--allow-empty", "-m", commit_msg],
+                cwd=self.chaos_engine_dir,
+                capture_output=True, text=True, timeout=30,
+            )
+            push_proc = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "push", "github", branch],
+                cwd=self.chaos_engine_dir,
+                capture_output=True, text=True, timeout=60,
+            )
+            sha_proc = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.chaos_engine_dir,
+                capture_output=True, text=True, timeout=10,
+            )
+            commit_sha = sha_proc.stdout.strip() if sha_proc.returncode == 0 else ""
+            return {"triggered": True, "branch": branch, "commit_sha": commit_sha, "method": "github_push"}
+
+        # ── Gitee 回退路径 ──
         # 1. git commit --allow-empty
         commit_msg = "loopengine: trigger CI"
         commit_proc = await asyncio.to_thread(
@@ -169,6 +200,9 @@ class CITrigger:
                     "jobs": [{"name": str, "status": str, "conclusion": str|None}]
                 }
         """
+        if self.use_github:
+            return await self._github_get_status(commit_sha)
+
         # 方案1: GET /repos/{repo}/builds?sha={sha}
         builds_url = f"{self.api_base}/repos/{self.repo}/builds"
         try:
@@ -219,6 +253,61 @@ class CITrigger:
             resp.status_code, resp2.status_code,
         )
         return {"status": "unknown", "sha": commit_sha, "jobs": []}
+
+    async def _github_get_status(self, commit_sha: str) -> dict:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {self.github_token}",
+        }
+        url = f"https://api.github.com/repos/{self.github_repo}/actions/runs?per_page=5"
+        if commit_sha:
+            url += f"&head_sha={commit_sha}"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(url, headers=headers)
+            if resp.status_code >= 400:
+                return {"status": "unknown", "sha": commit_sha, "jobs": []}
+        except httpx.HTTPError:
+            return {"status": "unknown", "sha": commit_sha, "jobs": []}
+
+        data = resp.json()
+        runs = data.get("workflow_runs", [])
+        run = None
+        for r in runs:
+            if r.get("head_branch") == self.trigger_branch:
+                run = r
+                break
+        if not run and runs:
+            run = runs[0]
+        if not run:
+            return {"status": "unknown", "sha": commit_sha, "jobs": []}
+
+        run_id = run["id"]
+        status = run.get("status", "unknown")
+        conclusion = run.get("conclusion", "")
+        if status == "completed":
+            ci_status = "success" if conclusion == "success" else "failure"
+        elif status in ("in_progress", "queued", "waiting"):
+            ci_status = "running"
+        else:
+            ci_status = "unknown"
+
+        jobs_url = f"https://api.github.com/repos/{self.github_repo}/actions/runs/{run_id}/jobs"
+        jobs_list = []
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp2 = await client.get(jobs_url, headers=headers)
+            if resp2.status_code < 400:
+                jobs_data = resp2.json()
+                for job in jobs_data.get("jobs", []):
+                    jobs_list.append({
+                        "name": job.get("name", ""),
+                        "status": job.get("status", "unknown"),
+                        "conclusion": job.get("conclusion", ""),
+                    })
+        except httpx.HTTPError:
+            pass
+        return {"status": ci_status, "sha": commit_sha, "run_id": run_id, "jobs": jobs_list}
 
     def _parse_builds_response(self, data: dict | list, commit_sha: str) -> dict:
         """解析 GET /builds 响应。

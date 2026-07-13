@@ -133,9 +133,10 @@ class ProcessManager:
 
             all_ready = True
             for svc in svc_list:
-                if svc["name"] in target_services and svc["status"] != "running":
-                    all_ready = False
-                    break
+                if svc["name"] in target_services:
+                    if svc["status"] == "stopped":
+                        all_ready = False
+                        break
 
             if all_ready:
                 return True
