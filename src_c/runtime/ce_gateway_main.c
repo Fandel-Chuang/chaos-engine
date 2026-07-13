@@ -1,105 +1,138 @@
 /*
  * ChaosEngine Gateway 进程入口
  *
- * C 进程，加载 src_lua/gateway/init.lua 作为业务脚本。
- * Gateway 提供：
- *   - Port 9000: TCP 客户端接入
- *   - Port 9001: KCP 客户端接入
- *   - Port 9002: WebSocket 客户端接入
+ * 基于 io_uring (ce_async_io) 的 C 原生网络网关。
+ * 不再使用 Lua 协程 + LuaSocket + select 的事件循环。
  *
- * 网络 I/O 由 LuaSocket 协程驱动，C 层提供 ce_net_base 绑定。
+ * 功能：
+ *   - Port 9000: TCP 客户端接入 (io_uring 异步 accept/recv/send)
+ *   - 二进制协议帧解析与消息路由
+ *   - 心跳检测 (PING/PONG) 与超时清理
+ *   - 后端 Game 服务连接管理
  *
  * 用法:
- *   ./chaos_gateway [--port PORT] [--backend HOST:PORT]
+ *   ./chaos_gateway [--port PORT] [--backend HOST:PORT] [--max-connections N]
  */
 
 #define _POSIX_C_SOURCE 200112L
 #include "public_api/chaos_engine.h"
-#include "network/ce_net_base_lua.h"
-
-#include <lua.h>
-#include <lauxlib.h>
-#include <lualib.h>
+#include "gateway/ce_gateway.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
-#include <libgen.h>
 
-#define GATEWAY_SCRIPT "src_lua/gateway/init.lua"
-
-static volatile int g_running = 1;
-static void signal_handler(int sig) { (void)sig; g_running = 0; }
-
-static int find_project_root(char* buf, size_t sz) {
-    char cwd[1024];
-    if (!getcwd(cwd, sizeof(cwd))) return -1;
-    snprintf(buf, sz, "%s/%s", cwd, GATEWAY_SCRIPT);
-    if (access(buf, R_OK) == 0) { snprintf(buf, sz, "%s", cwd); return 0; }
-    char path[1024]; snprintf(path, sizeof(path), "%s", cwd);
-    for (int i = 0; i < 5; i++) {
-        char tmp[1024]; snprintf(tmp, sizeof(tmp), "%s", path);
-        char* parent = dirname(tmp);
-        if (strcmp(parent, "/") == 0) break;
-        snprintf(path, sizeof(path), "%s", parent);
-        char test[1024];
-        snprintf(test, sizeof(test), "%s/%s", path, GATEWAY_SCRIPT);
-        if (access(test, R_OK) == 0) { snprintf(buf, sz, "%s", path); return 0; }
-    }
-    return -1;
-}
-
-static void setup_lua_path(lua_State* L, const char* root) {
-    lua_getglobal(L, "package"); lua_getfield(L, -1, "path");
-    const char* cur = lua_tostring(L, -1); lua_pop(L, 1);
-    char np[4096];
-    snprintf(np, sizeof(np), "%s/src_lua/?.lua;%s/src_lua/?/init.lua;%s",
-             root, root, cur ? cur : "");
-    lua_pushstring(L, np); lua_setfield(L, -2, "path"); lua_pop(L, 1);
+static void print_usage(const char* prog) {
+    fprintf(stderr,
+        "Usage: %s [OPTIONS]\n\n"
+        "Options:\n"
+        "  --port PORT               TCP listen port (default: 9000)\n"
+        "  --backend HOST:PORT       Backend Game service address (default: 127.0.0.1:7777)\n"
+        "  --max-connections N       Max client connections (default: 10000)\n"
+        "  --heartbeat-interval MS   Heartbeat interval in ms (default: 30000)\n"
+        "  --heartbeat-timeout MS    Heartbeat timeout in ms (default: 90000)\n"
+        "  --help, -h                Show this help\n",
+        prog);
 }
 
 int main(int argc, char** argv) {
-    signal(SIGINT, signal_handler); signal(SIGTERM, signal_handler);
+    /* 默认配置 */
+    CeGatewayConfig gw_cfg;
+    memset(&gw_cfg, 0, sizeof(gw_cfg));
+    gw_cfg.port = CE_GW_DEFAULT_PORT;
+    gw_cfg.max_connections = CE_GW_DEFAULT_MAX_CONNS;
+    gw_cfg.heartbeat_interval_ms = CE_GW_HEARTBEAT_INTERVAL_MS;
+    gw_cfg.heartbeat_timeout_ms = CE_GW_HEARTBEAT_TIMEOUT_MS;
 
-    char root[1024];
-    if (find_project_root(root, sizeof(root)) != 0) {
-        fprintf(stderr, "[Gateway] Cannot find project root\n");
+    /* 后端地址 (可被命令行覆盖) */
+    const char* backend_host = "127.0.0.1";
+    int         backend_port = 7777;
+
+    /* 解析命令行参数 */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+            gw_cfg.port = atoi(argv[++i]);
+            if (gw_cfg.port <= 0 || gw_cfg.port > 65535) gw_cfg.port = CE_GW_DEFAULT_PORT;
+        } else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
+            char* arg = argv[++i];
+            char* colon = strrchr(arg, ':');
+            if (colon) {
+                *colon = '\0';
+                backend_host = arg;
+                backend_port = atoi(colon + 1);
+                if (backend_port <= 0) backend_port = 7777;
+            }
+        } else if (strcmp(argv[i], "--max-connections") == 0 && i + 1 < argc) {
+            gw_cfg.max_connections = atoi(argv[++i]);
+            if (gw_cfg.max_connections <= 0) gw_cfg.max_connections = CE_GW_DEFAULT_MAX_CONNS;
+        } else if (strcmp(argv[i], "--heartbeat-interval") == 0 && i + 1 < argc) {
+            gw_cfg.heartbeat_interval_ms = atoi(argv[++i]);
+            if (gw_cfg.heartbeat_interval_ms <= 0)
+                gw_cfg.heartbeat_interval_ms = CE_GW_HEARTBEAT_INTERVAL_MS;
+        } else if (strcmp(argv[i], "--heartbeat-timeout") == 0 && i + 1 < argc) {
+            gw_cfg.heartbeat_timeout_ms = atoi(argv[++i]);
+            if (gw_cfg.heartbeat_timeout_ms <= 0)
+                gw_cfg.heartbeat_timeout_ms = CE_GW_HEARTBEAT_TIMEOUT_MS;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown option: %s\n", argv[i]);
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    /* 初始化引擎 */
+    CeEngineConfig cfg = {
+        .app_name = "ChaosEngine-Gateway",
+        .window_width = 0, .window_height = 0,
+        .fullscreen = CE_FALSE, .vsync = CE_FALSE,
+        .log_level = CE_LOG_INFO,
+        .log_file_path = "logs/chaos_gateway.log"
+    };
+    if (ce_init(&cfg) != CE_OK) {
+        fprintf(stderr, "[Gateway] Engine init failed\n");
         return 1;
     }
-    printf("[Gateway] Project root: %s\n", root);
 
-    CeEngineConfig cfg = {
-        .app_name = "ChaosEngine-Gateway", .window_width = 0, .window_height = 0,
-        .fullscreen = CE_FALSE, .vsync = CE_FALSE,
-        .log_level = CE_LOG_INFO, .log_file_path = "logs/chaos_gateway.log"
-    };
-    if (ce_init(&cfg) != CE_OK) { fprintf(stderr, "[Gateway] Engine init failed\n"); return 1; }
-
-    lua_State* L = luaL_newstate();
-    if (!L) { fprintf(stderr, "[Gateway] Lua VM failed\n"); ce_shutdown(); return 1; }
-    luaL_openlibs(L);
-    setup_lua_path(L, root);
-
-    /* 注册 gateway.net_base 模块 */
-    lua_pushcfunction(L, luaopen_gateway_net_base);
-    lua_call(L, 0, 1);
-    lua_setglobal(L, "gateway.net_base");
-
-    char sp[1024]; snprintf(sp, sizeof(sp), "%s/%s", root, GATEWAY_SCRIPT);
-    if (luaL_loadfile(L, sp) != LUA_OK) {
-        fprintf(stderr, "[Gateway] Load error: %s\n", lua_tostring(L, -1));
-        lua_close(L); ce_shutdown(); return 1;
-    }
-    int nargs = 0;
-    for (int i = 1; i < argc; i++) { lua_pushstring(L, argv[i]); nargs++; }
-    if (lua_pcall(L, nargs, 0, 0) != LUA_OK) {
-        fprintf(stderr, "[Gateway] Runtime error: %s\n", lua_tostring(L, -1));
-        lua_close(L); ce_shutdown(); return 1;
+    /* 创建 Gateway 实例 */
+    CeGateway* gw = ce_gateway_create(&gw_cfg);
+    if (!gw) {
+        fprintf(stderr, "[Gateway] Failed to create gateway instance\n");
+        ce_shutdown();
+        return 1;
     }
 
-    lua_close(L); ce_shutdown();
+    /* 添加后端服务 */
+    if (ce_gateway_add_backend(gw, backend_host, backend_port) != CE_OK) {
+        fprintf(stderr, "[Gateway] Failed to add backend %s:%d\n", backend_host, backend_port);
+        ce_gateway_destroy(gw);
+        ce_shutdown();
+        return 1;
+    }
+
+    /* 打印启动信息 */
+    printf("========================================\n");
+    printf("  ChaosEngine Gateway (io_uring)\n");
+    printf("  Backend: %s\n", ce_async_backend_name());
+    printf("  Listen:  0.0.0.0:%d\n", gw_cfg.port);
+    printf("  Backend: %s:%d\n", backend_host, backend_port);
+    printf("  MaxConns: %d\n", gw_cfg.max_connections);
+    printf("  HB: interval=%dms timeout=%dms\n",
+           gw_cfg.heartbeat_interval_ms, gw_cfg.heartbeat_timeout_ms);
+    printf("========================================\n");
+    fflush(stdout);
+
+    /* 运行事件循环 (阻塞直到 SIGINT/SIGTERM) */
+    ce_gateway_run(gw);
+
+    /* 清理 */
+    ce_gateway_destroy(gw);
+    ce_shutdown();
+
     printf("[Gateway] Shutdown complete.\n");
     return 0;
 }

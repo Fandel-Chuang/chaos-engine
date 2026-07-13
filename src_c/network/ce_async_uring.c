@@ -194,7 +194,10 @@ int ce_async_wait(CeAsyncContext* ctx, int min_events, int timeout_ms) {
         };
         int ret = io_uring_wait_cqes(&ctx->ring, &cqe, min_events - count,
                                       timeout_ms > 0 ? &ts : NULL, NULL);
-        if (ret < 0 && ret != -ETIME) { CE_LOG_ERROR("ASYNC", "wait_cqes: %d", ret); return -1; }
+        if (ret < 0 && ret != -ETIME && ret != -EINTR) {
+            CE_LOG_ERROR("ASYNC", "wait_cqes: %d", ret);
+            return -1;
+        }
 
         while (count < CE_ASYNC_MAX_EVENTS) {
             ret = io_uring_peek_cqe(&ctx->ring, &cqe);

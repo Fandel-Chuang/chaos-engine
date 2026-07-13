@@ -31,3 +31,4 @@ build_test/
 .pids/
 llm/
 .ci-reports/
+third_party/
