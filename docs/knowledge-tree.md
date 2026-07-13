@@ -232,7 +232,7 @@ core, ecs, editor, network, plugin, render, script
 | 类别 | 脚本 |
 |---|---|
 | **构建测试** | `build_and_test.sh`, `valgrind.supp` |
-| **集群生命周期** | `start_cluster.sh` (--game/--gateway/--router/--dbproxy/--admin/--all), `stop_cluster.sh`, `status.sh` (--json/--watch), `start_with_admin.sh` |
+| **集群生命周期** | `start_cluster.sh` (--game/--gateway/--router/--dbproxy/--admin/--all), `stop_cluster_server.sh`, `status.sh` (--json/--watch), `start_with_admin.sh` |
 | **组件启动** | `start_client.sh` (--tcp/--ws/--headless/--stress), `start_dbproxy.sh` (primary/backup), `start_gateway.sh`, `install-admin-deps.sh`, `verify-admin-deps.sh` |
 | **测试** | `test_client.sh`, `test_dbproxy.sh` (9003), `test_gateway_stress.sh`, `test_gateway_tcp.sh` (9000), `test_gateway_ws.sh` (9002), `test_save.sh`, `test_sync.sh`, `joint_client_test.sh` (→7777), `verify_client_sync.sh` |
 | **基准** | `bench_async_io.py` (P50/P90/P99, QPS), `bench_async_io.sh` (uring vs posix) |

@@ -124,6 +124,7 @@ typedef struct CeGatewayConn {
     char                 addr[64];      /* KCP: 对端地址字符串 "IP:Port" */
     /* ---- WebSocket 专属字段 ---- */
     int                  ws_state;      /* WS 状态：0=等待握手, 1=已升级, -1=不是WS */
+    int                  slot;          /* 在 conns 数组中的索引，-1 表示未注册 */
 } CeGatewayConn;
 
 /* ================================================================
@@ -170,6 +171,10 @@ typedef struct CeGateway {
 
     CeBool               running;          /* 事件循环运行标志 */
     CeBool               ws_enabled;       /* 是否启用 WebSocket */
+
+    /* 动态超时参数 */
+    int                  wait_timeout_ms;  /* 当前 wait 超时 (动态调整) */
+    CeBool               last_wait_timed_out; /* 上次 wait 是否超时 */
 } CeGateway;
 
 /* ================================================================
