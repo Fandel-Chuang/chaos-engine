@@ -1,0 +1,10 @@
+@echo off 
+setlocal enabledelayedexpansion 
+set ROOT=%%~dp0 
+set BUILD=%%ROOT%%build 
+set BIN=%%BUILD%%\bin 
+set TARGET=chaos_headless 
+set BUILD_TYPE=Debug 
+set REBUILD=0 
+set RUN_AFTER=1 
+set EXTRA_ARGS= 

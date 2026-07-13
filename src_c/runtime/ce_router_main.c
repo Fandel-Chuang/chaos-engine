@@ -32,8 +32,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+
+#ifdef _WIN32
+#include "core/ce_win_compat.h"
+#include <direct.h>
+#define getcwd _getcwd
+static char* win_dirname(const char* path) {
+    static char buf[256];
+    strncpy(buf, path, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char* s = strrchr(buf, '\\');
+    if (!s) s = strrchr(buf, '/');
+    if (s) *s = '\0';
+    return buf;
+}
+#define dirname win_dirname
+#else
 #include <unistd.h>
 #include <libgen.h>
+#endif
 
 /* ================================================================
  * 常量

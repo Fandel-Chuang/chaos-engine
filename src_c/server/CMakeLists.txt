@@ -15,7 +15,14 @@ target_include_directories(engine_server PRIVATE
 
 target_link_libraries(engine_server PRIVATE engine_core)
 
-target_compile_options(engine_server PRIVATE
-    $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -std=c99>
-    $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -std=c99>
-)
+if(MSVC)
+    set(_CE_COMPAT "${CMAKE_SOURCE_DIR}/src_c/core/ce_win_compat.h")
+    target_compile_options(engine_server PRIVATE
+        /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS "/FI${_CE_COMPAT}"
+    )
+else()
+    target_compile_options(engine_server PRIVATE
+        $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -std=c99>
+        $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -std=c99>
+    )
+endif()
