@@ -41,7 +41,7 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Debug
 
       - name: 编译
-        run: cd build && make -j$(nproc)
+        run: cd build && make VERBOSE=1 -j$(nproc)
 
       - name: 全量测试
         run: cd build && ctest --output-on-failure -j$(nproc)
@@ -75,7 +75,7 @@ jobs:
         run: |
           mkdir -p build_rel && cd build_rel
           cmake .. -DCMAKE_BUILD_TYPE=Release
-          make -j$(nproc)
+          make VERBOSE=1 -j$(nproc)
 
   # ── Job 3: Lua 语法检查 ──
   lua-lint:
