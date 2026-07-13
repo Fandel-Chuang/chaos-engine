@@ -45,7 +45,7 @@ extern "C" {
 #define CE_GW_DEFAULT_MAX_CONNS 10000
 
 /** io_uring 队列深度 */
-#define CE_GW_QUEUE_DEPTH       512
+#define CE_GW_QUEUE_DEPTH       16384
 
 /** 心跳间隔 (毫秒) */
 #define CE_GW_HEARTBEAT_INTERVAL_MS  30000
