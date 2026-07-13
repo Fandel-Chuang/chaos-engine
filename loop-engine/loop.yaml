@@ -1,0 +1,25 @@
+# LoopEngine 配置文件
+chaos_engine:
+  dir: /home/zhongfangdao/chaos-engine
+  build_dir: build
+
+ci:
+  github_token: "${GITHUB_TOKEN}"
+  github_repo: "Fandel-Chuang/chaos-engine"
+  gitee_token: ""
+  repo: zhong-fangdao/chaos-engine
+  trigger_branch: master
+
+ark:
+  api_key: ""
+  base_url: https://ark.cn-beijing.volces.com/api/coding/v3
+
+loops:
+  dev:
+    max_retries: 2
+  test:
+    max_retries: 2
+  verify:
+    max_retries: 2
+  client_ui:
+    max_retries: 2

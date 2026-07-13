@@ -479,6 +479,7 @@ static CeGatewayConn* conn_create(int fd, uint64_t conn_id) {
     conn->protocol = CE_GW_PROTO_TCP;  /* 默认 TCP */
     conn->kcp_ctx = NULL;
     conn->ws_state = 0;  /* 0=等待握手判断 */
+    conn->slot = -1;     /* 未注册 */
 
     return conn;
 }
@@ -538,6 +539,7 @@ static int register_conn(CeGateway* gw, CeGatewayConn* conn) {
     }
 
     gw->conns[slot] = conn;
+    conn->slot = slot;
     gw->conn_count++;
     return slot;
 }
@@ -546,6 +548,7 @@ static int register_conn(CeGateway* gw, CeGatewayConn* conn) {
 static void unregister_conn(CeGateway* gw, int slot) {
     if (slot < 0 || slot >= gw->conn_capacity) return;
     if (gw->conns[slot]) {
+        gw->conns[slot]->slot = -1;
         gw->conns[slot] = NULL;
         gw->conn_count--;
     }
@@ -907,9 +910,13 @@ static void ws_send_frame(CeGateway* gw, CeGatewayConn* conn,
  * 消息处理
  * ================================================================ */
 
-/** 向客户端发送数据 (自动区分 TCP/KCP/WS) */
+/** 向客户端发送数据 (自动区分 TCP/KCP/WS)
+ * 小包 (<=256B) 用同步 send，大包走 io_uring 异步 send */
 static void gw_send_to_conn(CeGateway* gw, CeGatewayConn* conn,
                             const uint8_t* data, int len) {
+    /* 同步发送阈值：小包直接 send，避免 SQE/CQE 开销 */
+    const int SYNC_SEND_THRESHOLD = 256;
+
     if (conn->protocol == CE_GW_PROTO_KCP && conn->kcp_ctx) {
         /* KCP 连接：通过 ce_kcp_send 发送可靠数据 */
         int ret = ce_kcp_send(conn->kcp_ctx, data, len);
@@ -924,24 +931,29 @@ static void gw_send_to_conn(CeGateway* gw, CeGatewayConn* conn,
         /* WebSocket：封装成 WS 帧再发送 (二进制帧) */
         ws_send_frame(gw, conn, data, len, WS_OPCODE_BINARY);
     } else {
-        /* TCP 连接：通过 io_uring 异步发送 */
-        ce_async_send(gw->io, conn->fd, data, len, conn);
+        /* TCP 连接：小包同步 send，大包异步 io_uring */
+        if (len <= SYNC_SEND_THRESHOLD) {
+            /* 同步发送：内核 socket buffer 足够，不会阻塞 */
+            ssize_t sent = send(conn->fd, data, (size_t)len, MSG_NOSIGNAL);
+            if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                CE_LOG_WARN("GATEWAY", "Sync send failed for conn=%llu (errno=%d)",
+                            (unsigned long long)conn->conn_id, errno);
+                conn->state = CE_GW_CONN_CLOSING;
+            }
+        } else {
+            /* 大包走 io_uring 异步发送 */
+            ce_async_send(gw->io, conn->fd, data, len, conn);
+        }
     }
 }
 
-/** 向客户端发送 PONG 消息 */
+/** 向客户端发送 PONG 消息 (走 gw_send_to_conn，6B 小包自动同步 send) */
 static void send_pong(CeGateway* gw, CeGatewayConn* conn) {
-    /* 构造 PONG 消息帧: [4B total_len=6][2B msg_type=PONG]
-     * 注意: ce_async_send 将 buf 指针传给 io_uring_prep_send，内核异步读取。
-     * 不能使用栈缓冲区（函数返回后栈帧失效），必须使用连接的 send_buf。 */
-    if (CE_GW_HEADER_SIZE > CE_GW_SEND_BUF_SIZE) {
-        CE_LOG_ERROR("GATEWAY", "Header size exceeds send buffer");
-        return;
-    }
-    ce_gateway_write_u32(conn->send_buf, (uint32_t)CE_GW_HEADER_SIZE);
-    ce_gateway_write_u16(conn->send_buf + 4, CE_GW_MSG_PONG);
-
-    gw_send_to_conn(gw, conn, conn->send_buf, CE_GW_HEADER_SIZE);
+    /* 构造 PONG 消息帧: [4B total_len=6][2B msg_type=PONG] */
+    uint8_t pong_buf[CE_GW_HEADER_SIZE];
+    ce_gateway_write_u32(pong_buf, (uint32_t)CE_GW_HEADER_SIZE);
+    ce_gateway_write_u16(pong_buf + 4, CE_GW_MSG_PONG);
+    gw_send_to_conn(gw, conn, pong_buf, CE_GW_HEADER_SIZE);
 }
 
 /** 处理收到的完整消息 (解析协议帧 -> 路由) */
@@ -1245,6 +1257,10 @@ CeGateway* ce_gateway_create(const CeGatewayConfig* config) {
     gw->kcp_enabled = config ? config->kcp_enabled : 1;  /* 默认启用 KCP */
     gw->ws_enabled = config ? config->ws_enabled : 1;   /* 默认启用 WebSocket */
 
+    /* 动态超时：初始 1ms，超时且 events==0 时递增 */
+    gw->wait_timeout_ms = 1;
+    gw->last_wait_timed_out = CE_FALSE;
+
     if (gw->max_conns <= 0) gw->max_conns = CE_GW_DEFAULT_MAX_CONNS;
     if (gw->heartbeat_interval_ms <= 0) gw->heartbeat_interval_ms = CE_GW_HEARTBEAT_INTERVAL_MS;
     if (gw->heartbeat_timeout_ms <= 0) gw->heartbeat_timeout_ms = CE_GW_HEARTBEAT_TIMEOUT_MS;
@@ -1406,13 +1422,32 @@ CeResult ce_gateway_run(CeGateway* gw) {
         /* 提交所有待处理请求到内核 */
         ce_async_submit(gw->io);
 
-        /* 等待完成事件 (1s 超时做心跳检查) */
-        int n = ce_async_wait(gw->io, 1, CE_GW_LOOP_TIMEOUT_MS);
+        /* 动态超时等待：
+         * - 初始 1ms（低延迟响应）
+         * - 仅当上次 wait 超时且 events==0 时递增（空闲时逐步退避）
+         * - 有事件时立即重置为 1ms
+         * - 上限 1000ms（保证心跳检查频率） */
+        int n = ce_async_wait(gw->io, 1, gw->wait_timeout_ms);
         if (n < 0) {
-            /* 信号中断 (EINTR) 时不退出，检查停止标志 */
             if (g_stop_flag) break;
             CE_LOG_ERROR("GATEWAY", "ce_async_wait failed");
             continue;
+        }
+
+        /* 动态调整超时 */
+        if (n > 0) {
+            /* 有事件，重置为最低超时 */
+            gw->wait_timeout_ms = 1;
+            gw->last_wait_timed_out = CE_FALSE;
+        } else {
+            /* 超时且 events==0，递增超时（指数退避，上限 1000ms） */
+            if (gw->last_wait_timed_out) {
+                gw->wait_timeout_ms = gw->wait_timeout_ms * 2;
+                if (gw->wait_timeout_ms > 1000) gw->wait_timeout_ms = 1000;
+            } else {
+                /* 第一次超时，先保持当前值，标记已超时 */
+                gw->last_wait_timed_out = CE_TRUE;
+            }
         }
 
         /* 处理完成事件 */
@@ -1497,12 +1532,9 @@ CeResult ce_gateway_run(CeGateway* gw) {
                     CE_LOG_INFO("GATEWAY", "[-] Client disconnected (fd=%d, conn_id=%llu, nbytes=%d)",
                                 conn->fd, (unsigned long long)conn->conn_id, ev->nbytes);
 
-                    /* 找到 slot 并关闭 */
-                    for (int s = 0; s < gw->conn_capacity; s++) {
-                        if (gw->conns[s] == conn) {
-                            close_conn(gw, s);
-                            break;
-                        }
+                    /* O(1) slot 查找并关闭 */
+                    if (conn->slot >= 0) {
+                        close_conn(gw, conn->slot);
                     }
                     break;
                 }
@@ -1515,11 +1547,8 @@ CeResult ce_gateway_run(CeGateway* gw) {
 
                 /* 如果连接正在关闭，不再提交 recv */
                 if (conn->state == CE_GW_CONN_CLOSING) {
-                    for (int s = 0; s < gw->conn_capacity; s++) {
-                        if (gw->conns[s] == conn) {
-                            close_conn(gw, s);
-                            break;
-                        }
+                    if (conn->slot >= 0) {
+                        close_conn(gw, conn->slot);
                     }
                     break;
                 }

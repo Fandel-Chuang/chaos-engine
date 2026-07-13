@@ -15,7 +15,7 @@ from pathlib import Path
 class ProcessManager:
     """ChaosEngine 集群进程管理器。
 
-    通过 start_cluster.sh / stop_cluster.sh / status.sh 管理集群生命周期。
+    通过 start_cluster.sh / stop_cluster_server.sh / status.sh 管理集群生命周期。
     """
 
     # 服务定义（与 status.sh / start_cluster.sh 一致）
@@ -69,7 +69,7 @@ class ProcessManager:
         Returns:
             bool: 停止脚本是否执行成功。
         """
-        script = self.project_dir / "scripts" / "stop_cluster.sh"
+        script = self.project_dir / "scripts" / "stop_cluster_server.sh"
         try:
             result = subprocess.run(
                 ["bash", str(script)],
@@ -133,9 +133,10 @@ class ProcessManager:
 
             all_ready = True
             for svc in svc_list:
-                if svc["name"] in target_services and svc["status"] != "running":
-                    all_ready = False
-                    break
+                if svc["name"] in target_services:
+                    if svc["status"] == "stopped":
+                        all_ready = False
+                        break
 
             if all_ready:
                 return True

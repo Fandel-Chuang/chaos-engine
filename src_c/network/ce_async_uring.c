@@ -146,10 +146,11 @@ int ce_async_submit(CeAsyncContext* ctx) {
 }
 
 int ce_async_wait(CeAsyncContext* ctx, int min_events, int timeout_ms) {
+    (void)min_events; /* peek 取全部 CQE，阻塞等待固定 1 个 */
     struct io_uring_cqe* cqe;
     int count = 0;
 
-    /* 非阻塞获取 */
+    /* 非阻塞获取 -- 取所有可用 CQE，不受 min_events 限制 */
     while (count < CE_ASYNC_MAX_EVENTS) {
         int ret = io_uring_peek_cqe(&ctx->ring, &cqe);
         if (ret == -EAGAIN) break;
@@ -166,16 +167,15 @@ int ce_async_wait(CeAsyncContext* ctx, int min_events, int timeout_ms) {
 
         io_uring_cqe_seen(&ctx->ring, cqe);
         count++;
-        if (count >= min_events) break;
     }
 
-    /* 等待更多 */
-    if (count < min_events && timeout_ms != 0) {
+    /* 仅当 peek 到 0 个 CQE 时才阻塞等待 (至少 1 个) */
+    if (count == 0 && timeout_ms != 0) {
         struct __kernel_timespec ts = {
             .tv_sec  = timeout_ms > 0 ? timeout_ms / 1000 : 0,
             .tv_nsec = timeout_ms > 0 ? (timeout_ms % 1000) * 1000000L : 0
         };
-        int ret = io_uring_wait_cqes(&ctx->ring, &cqe, min_events - count,
+        int ret = io_uring_wait_cqes(&ctx->ring, &cqe, 1,
                                       timeout_ms > 0 ? &ts : NULL, NULL);
         if (ret < 0 && ret != -ETIME && ret != -EINTR) {
             CE_LOG_ERROR("ASYNC", "wait_cqes: %d", ret);
