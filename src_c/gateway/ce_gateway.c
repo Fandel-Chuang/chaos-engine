@@ -1215,9 +1215,9 @@ static void close_conn(CeGateway* gw, int slot) {
         CE_LOG_INFO("GATEWAY", "Closing %s conn %llu (fd=%d)",
                     proto_name, (unsigned long long)conn->conn_id, conn->fd);
 
-        /* 异步关闭 fd (仅 TCP/WS 连接) */
+        /* 同步关闭 fd（避免 io_uring 异步关闭导致 fd 复用竞争） */
         if (conn->fd >= 0) {
-            ce_async_close(gw->io, conn->fd);
+            close(conn->fd);
             conn->fd = -1;
         }
     }
