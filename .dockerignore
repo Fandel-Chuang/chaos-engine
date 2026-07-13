@@ -1,0 +1,15 @@
+build/
+build-asan/
+build_bench/
+build_test/
+.git/
+.ci-reports/
+.pids/
+logs/
+loop-engine/
+src_lua/
+node_modules/
+*.o
+*.a
+*.so
+*.log

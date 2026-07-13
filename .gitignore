@@ -30,3 +30,4 @@ build_bench/
 build_test/
 .pids/
 llm/
+.ci-reports/

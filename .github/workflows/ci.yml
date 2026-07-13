@@ -27,7 +27,8 @@ jobs:
             cmake build-essential \
             liblua5.4-dev liburing-dev libbpf-dev \
             clang llvm luarocks xvfb xauth \
-            libvulkan-dev libx11-dev
+            libvulkan-dev libx11-dev \
+            flatbuffers-compiler
 
       - name: 安装 Lapis
         run: |
@@ -67,7 +68,8 @@ jobs:
             cmake build-essential \
             liblua5.4-dev liburing-dev libbpf-dev \
             clang llvm \
-            libvulkan-dev libx11-dev
+            libvulkan-dev libx11-dev \
+            flatbuffers-compiler
 
       - name: Release 编译
         run: |
@@ -123,7 +125,8 @@ jobs:
             cmake build-essential valgrind \
             liblua5.4-dev liburing-dev libbpf-dev \
             clang llvm \
-            libvulkan-dev libx11-dev
+            libvulkan-dev libx11-dev \
+            flatbuffers-compiler
 
       - name: 编译 (Debug)
         run: |

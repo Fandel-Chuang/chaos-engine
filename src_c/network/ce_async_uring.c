@@ -247,7 +247,11 @@ CeBool ce_async_has_zcrx(void) {
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
     if (io_uring_queue_init_params(1, &ring, &params) < 0) return CE_FALSE;
+#ifdef IORING_FEAT_RECVSEND_BUNDLE
     CeBool has = (params.features & IORING_FEAT_RECVSEND_BUNDLE) ? CE_TRUE : CE_FALSE;
+#else
+    CeBool has = CE_FALSE;
+#endif
     io_uring_queue_exit(&ring);
     return has;
 }
