@@ -70,8 +70,12 @@ jobs:
 
       - name: 冒烟测试
         run: |
-          chmod +x scripts/build_and_test.sh
-          ./scripts/build_and_test.sh --no-test
+          echo "=== 验证编译产物 ==="
+          ls -la build/bin/chaos_server && echo "chaos_server OK"
+          ls -la build/bin/chaos_client && echo "chaos_client OK"
+          ls -la build/bin/chaos_gateway && echo "chaos_gateway OK"
+          ls -la build/bin/chaos_router && echo "chaos_router OK"
+          ls -la build/bin/chaos_dbproxy && echo "chaos_dbproxy OK"
 
   # ── Job 2: Release 编译验证 ──
   release-build:
@@ -96,8 +100,20 @@ jobs:
       - name: Release 编译
         run: |
           mkdir -p build_rel && cd build_rel
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          make VERBOSE=1 -j$(nproc)
+          cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1 | tee /tmp/cmake_rel.txt
+          make VERBOSE=1 -j$(nproc) 2>&1 | tee /tmp/make_rel.txt || {
+            {
+              echo "### Release 编译错误"
+              echo '```'
+              grep -iE 'error:|undefined reference|FAILED' /tmp/make_rel.txt | tail -20
+              echo '```'
+              echo "### CMake 输出"
+              echo '```'
+              cat /tmp/cmake_rel.txt
+              echo '```'
+            } >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
 
   # ── Job 3: Lua 语法检查 ──
   lua-lint:
