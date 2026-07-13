@@ -35,10 +35,11 @@
 #include <netdb.h>
 
 /* ================================================================
- * 全局停止标志 (信号处理)
+ * 全局停止标志 (信号处理) + 活跃 Gateway 引用 (KCP output callback)
  * ================================================================ */
 
 static volatile sig_atomic_t g_stop_flag = 0;
+CeGateway* g_active_gw = NULL;  /* 事件循环期间的全局引用，供 KCP output callback 使用 */
 
 static void gw_signal_handler(int sig) {
     (void)sig;
@@ -129,7 +130,35 @@ static int create_listen_fd(int port) {
     }
 
     set_nonblock(fd);
-    CE_LOG_INFO("GATEWAY", "Listening on 0.0.0.0:%d (fd=%d)", port, fd);
+    CE_LOG_INFO("GATEWAY", "TCP listening on 0.0.0.0:%d (fd=%d)", port, fd);
+    return fd;
+}
+
+/** 创建 UDP socket 并 bind 同一个端口 (与 TCP 共用端口 9000)
+ *  内核端口空间按协议 (TCP/UDP) 隔离，互不冲突 */
+static int create_udp_fd(int port) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        CE_LOG_ERROR("GATEWAY", "UDP socket() failed: %s", strerror(errno));
+        return -1;
+    }
+
+    set_reuseaddr(fd);
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)port);
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        CE_LOG_ERROR("GATEWAY", "UDP bind(port=%d) failed: %s", port, strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    set_nonblock(fd);
+    CE_LOG_INFO("GATEWAY", "KCP/UDP listening on 0.0.0.0:%d (fd=%d)", port, fd);
     return fd;
 }
 
@@ -195,12 +224,19 @@ static CeGatewayConn* conn_create(int fd, uint64_t conn_id) {
     conn->recv_offset = 0;
     conn->send_len = 0;
     conn->recv_pending = CE_FALSE;
+    conn->protocol = CE_GW_PROTO_TCP;  /* 默认 TCP */
+    conn->kcp_ctx = NULL;
 
     return conn;
 }
 
 static void conn_destroy(CeGatewayConn* conn) {
     if (!conn) return;
+    /* KCP 连接需要销毁 KCP 上下文 */
+    if (conn->kcp_ctx) {
+        ce_kcp_destroy(conn->kcp_ctx);
+        conn->kcp_ctx = NULL;
+    }
     free(conn->recv_buf);
     free(conn->send_buf);
     free(conn);
@@ -263,6 +299,159 @@ static void unregister_conn(CeGateway* gw, int slot) {
 }
 
 /* ================================================================
+ * KCP 连接管理
+ * ================================================================ */
+
+/* g_active_gw 在文件顶部定义，供 KCP output callback 使用 */
+
+/** KCP 输出回调：将 KCP 协议栈产生的数据通过 sendto 发回对端 UDP socket */
+static int kcp_output_cb(const char* buf, int len, void* user_data) {
+    CeGatewayConn* conn = (CeGatewayConn*)user_data;
+    if (!conn || !g_active_gw || g_active_gw->kcp_fd < 0) return -1;
+
+    int n = sendto(g_active_gw->kcp_fd, buf, len, 0,
+                   (struct sockaddr*)&conn->peer_addr,
+                   sizeof(conn->peer_addr));
+    if (n < 0) {
+        CE_LOG_TRACE("GATEWAY", "KCP sendto failed: %s", strerror(errno));
+        return -1;
+    }
+    return n;
+}
+
+/** 从 KCP UDP 数据包前 4 字节解析 conv ID */
+static uint32_t kcp_parse_conv(const uint8_t* data, int len) {
+    if (len < 4) return 0;
+    /* KCP conv 是小端序 */
+    return (uint32_t)data[0] | ((uint32_t)data[1] << 8)
+         | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+}
+
+/** 查找已存在的 KCP 连接 (按 conv ID 匹配) */
+static CeGatewayConn* kcp_find_conn(CeGateway* gw, uint32_t conv) {
+    for (int i = 0; i < gw->conn_capacity; i++) {
+        CeGatewayConn* conn = gw->conns[i];
+        if (conn && conn->protocol == CE_GW_PROTO_KCP && conn->kcp_ctx) {
+            if (conn->kcp_conv == conv) {
+                return conn;
+            }
+        }
+    }
+    return NULL;
+}
+
+/** 创建新的 KCP 连接 (复用 CeGatewayConn 结构体) */
+static CeGatewayConn* kcp_create_conn(CeGateway* gw, uint32_t conv,
+                                      const struct sockaddr_in* peer_addr) {
+    CeGatewayConn* conn = conn_create(gw->kcp_fd, gw->next_conn_id++);
+    if (!conn) return NULL;
+
+    conn->protocol = CE_GW_PROTO_KCP;
+    conn->fd = gw->kcp_fd;  /* 所有 KCP 连接共用同一个 UDP fd */
+    conn->peer_addr = *peer_addr;
+    conn->kcp_conv = conv;
+
+    /* 格式化地址字符串 */
+    char ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &peer_addr->sin_addr, ip, sizeof(ip));
+    snprintf(conn->addr, sizeof(conn->addr), "%s:%d",
+             ip, ntohs(peer_addr->sin_port));
+
+    /* 创建 KCP 上下文 */
+    conn->kcp_ctx = ce_kcp_create(conv, conn);
+    if (!conn->kcp_ctx) {
+        CE_LOG_ERROR("GATEWAY", "Failed to create KCP context for conv=%u", conv);
+        conn_destroy(conn);
+        return NULL;
+    }
+
+    /* 配置 KCP: 快速模式 */
+    ce_kcp_set_config(conn->kcp_ctx, 1, 10, 2, 1);
+    ce_kcp_set_wndsize(conn->kcp_ctx, 128, 128);
+    ce_kcp_set_output_callback(conn->kcp_ctx, kcp_output_cb);
+
+    /* 注册到连接数组 */
+    int slot = register_conn(gw, conn);
+    if (slot < 0) {
+        conn_destroy(conn);
+        return NULL;
+    }
+
+    CE_LOG_INFO("GATEWAY", "[+] KCP client connected (conv=%u, addr=%s, conn_id=%llu, slot=%d)",
+                conv, conn->addr, (unsigned long long)conn->conn_id, slot);
+
+    return conn;
+}
+
+/* 前向声明：process_recv_data 定义在后面 */
+static void process_recv_data(CeGateway* gw, CeGatewayConn* conn, int nbytes);
+
+/** 处理收到的 KCP UDP 数据包 */
+static void handle_kcp_recv(CeGateway* gw, const uint8_t* data, int len,
+                            const struct sockaddr_in* peer_addr) {
+    /* 解析 KCP conv ID */
+    uint32_t conv = kcp_parse_conv(data, len);
+    if (conv == 0) {
+        CE_LOG_WARN("GATEWAY", "KCP: invalid conv=0, dropping %d bytes", len);
+        return;
+    }
+
+    /* 查找或创建 KCP 连接 */
+    CeGatewayConn* conn = kcp_find_conn(gw, conv);
+    if (!conn) {
+        conn = kcp_create_conn(gw, conv, peer_addr);
+        if (!conn) return;
+    }
+
+    /* 更新活跃时间和对端地址 (地址可能变化, UDP 无连接) */
+    conn->last_active_us = gw_now_us();
+    conn->peer_addr = *peer_addr;
+
+    /* 喂给 KCP 协议栈 */
+    int ret = ce_kcp_input(conn->kcp_ctx, data, len);
+    if (ret < 0) {
+        CE_LOG_TRACE("GATEWAY", "KCP input error conv=%u ret=%d", conv, ret);
+        return;
+    }
+
+    /* 驱动 KCP 状态机 */
+    uint32_t now_ms = (uint32_t)(gw_now_us() / 1000ULL);
+    ce_kcp_update(conn->kcp_ctx, now_ms);
+
+    /* 读取可靠数据 (可能有多个消息) */
+    uint8_t kcp_data[CE_GW_RECV_BUF_SIZE];
+    int kcp_len;
+    while ((kcp_len = ce_kcp_recv(conn->kcp_ctx, kcp_data, sizeof(kcp_data))) > 0) {
+        /* 将 KCP 可靠数据当作 TCP recv 数据处理 */
+        memcpy(conn->recv_buf, kcp_data, kcp_len);
+        conn->recv_offset = kcp_len;
+        process_recv_data(gw, conn, kcp_len);
+        conn->recv_offset = 0;  /* KCP 连接每次 recv 都是完整消息，重置 */
+    }
+}
+
+/** 每次事件循环迭代时驱动所有 KCP 连接的状态机 */
+static void kcp_update_all(CeGateway* gw) {
+    uint32_t now_ms = (uint32_t)(gw_now_us() / 1000ULL);
+    for (int i = 0; i < gw->conn_capacity; i++) {
+        CeGatewayConn* conn = gw->conns[i];
+        if (!conn || conn->protocol != CE_GW_PROTO_KCP || !conn->kcp_ctx) continue;
+
+        ce_kcp_update(conn->kcp_ctx, now_ms);
+
+        /* 检查是否有可靠数据到达 */
+        uint8_t kcp_data[CE_GW_RECV_BUF_SIZE];
+        int kcp_len;
+        while ((kcp_len = ce_kcp_recv(conn->kcp_ctx, kcp_data, sizeof(kcp_data))) > 0) {
+            memcpy(conn->recv_buf, kcp_data, kcp_len);
+            conn->recv_offset = kcp_len;
+            process_recv_data(gw, conn, kcp_len);
+            conn->recv_offset = 0;
+        }
+    }
+}
+
+/* ================================================================
  * 后端管理
  * ================================================================ */
 
@@ -321,6 +510,25 @@ static void connect_backends(CeGateway* gw) {
  * 消息处理
  * ================================================================ */
 
+/** 向客户端发送数据 (自动区分 TCP/KCP) */
+static void gw_send_to_conn(CeGateway* gw, CeGatewayConn* conn,
+                            const uint8_t* data, int len) {
+    if (conn->protocol == CE_GW_PROTO_KCP && conn->kcp_ctx) {
+        /* KCP 连接：通过 ce_kcp_send 发送可靠数据 */
+        int ret = ce_kcp_send(conn->kcp_ctx, data, len);
+        if (ret < 0) {
+            CE_LOG_WARN("GATEWAY", "KCP send failed for conn=%llu",
+                        (unsigned long long)conn->conn_id);
+        }
+        /* 驱动 KCP 状态机以尽快发送 */
+        uint32_t now_ms = (uint32_t)(gw_now_us() / 1000ULL);
+        ce_kcp_update(conn->kcp_ctx, now_ms);
+    } else {
+        /* TCP 连接：通过 io_uring 异步发送 */
+        ce_async_send(gw->io, conn->fd, data, len, conn);
+    }
+}
+
 /** 向客户端发送 PONG 消息 */
 static void send_pong(CeGateway* gw, CeGatewayConn* conn) {
     /* 构造 PONG 消息帧: [4B total_len=6][2B msg_type=PONG]
@@ -333,7 +541,7 @@ static void send_pong(CeGateway* gw, CeGatewayConn* conn) {
     ce_gateway_write_u32(conn->send_buf, (uint32_t)CE_GW_HEADER_SIZE);
     ce_gateway_write_u16(conn->send_buf + 4, CE_GW_MSG_PONG);
 
-    ce_async_send(gw->io, conn->fd, conn->send_buf, CE_GW_HEADER_SIZE, conn);
+    gw_send_to_conn(gw, conn, conn->send_buf, CE_GW_HEADER_SIZE);
 }
 
 /** 处理收到的完整消息 (解析协议帧 -> 路由) */
@@ -384,7 +592,7 @@ static void handle_message(CeGateway* gw, CeGatewayConn* conn,
             /* 发送错误响应: 使用 conn->send_buf 避免栈缓冲区悬空 */
             ce_gateway_write_u32(conn->send_buf, (uint32_t)CE_GW_HEADER_SIZE);
             ce_gateway_write_u16(conn->send_buf + 4, CE_GW_MSG_LOGIN_RESP);
-            ce_async_send(gw->io, conn->fd, conn->send_buf, CE_GW_HEADER_SIZE, conn);
+            gw_send_to_conn(gw, conn, conn->send_buf, CE_GW_HEADER_SIZE);
         }
         break;
 
@@ -469,7 +677,7 @@ static void handle_backend_recv(CeGateway* gw, int backend_idx, int nbytes) {
         for (int i = 0; i < gw->conn_capacity; i++) {
             CeGatewayConn* conn = gw->conns[i];
             if (conn && conn->state == CE_GW_CONN_ACTIVE) {
-                ce_async_send(gw->io, conn->fd, be->recv_buf, (int)total_len, conn);
+                gw_send_to_conn(gw, conn, be->recv_buf, (int)total_len);
             }
         }
 
@@ -525,13 +733,19 @@ static void close_conn(CeGateway* gw, int slot) {
     CeGatewayConn* conn = gw->conns[slot];
     if (!conn) return;
 
-    CE_LOG_INFO("GATEWAY", "Closing conn %llu (fd=%d)",
-                (unsigned long long)conn->conn_id, conn->fd);
+    if (conn->protocol == CE_GW_PROTO_KCP) {
+        CE_LOG_INFO("GATEWAY", "Closing KCP conn %llu (conv=%u, addr=%s)",
+                    (unsigned long long)conn->conn_id, conn->kcp_conv, conn->addr);
+        /* KCP 连接共用 kcp_fd，不能关闭它，只销毁 KCP 上下文和连接对象 */
+    } else {
+        CE_LOG_INFO("GATEWAY", "Closing TCP conn %llu (fd=%d)",
+                    (unsigned long long)conn->conn_id, conn->fd);
 
-    /* 异步关闭 fd */
-    if (conn->fd >= 0) {
-        ce_async_close(gw->io, conn->fd);
-        conn->fd = -1;
+        /* 异步关闭 fd (仅 TCP 连接) */
+        if (conn->fd >= 0) {
+            ce_async_close(gw->io, conn->fd);
+            conn->fd = -1;
+        }
     }
 
     unregister_conn(gw, slot);
@@ -554,6 +768,7 @@ CeGateway* ce_gateway_create(const CeGatewayConfig* config) {
     gw->max_conns = config ? config->max_connections : CE_GW_DEFAULT_MAX_CONNS;
     gw->heartbeat_interval_ms = config ? config->heartbeat_interval_ms : CE_GW_HEARTBEAT_INTERVAL_MS;
     gw->heartbeat_timeout_ms = config ? config->heartbeat_timeout_ms : CE_GW_HEARTBEAT_TIMEOUT_MS;
+    gw->kcp_enabled = config ? config->kcp_enabled : 1;  /* 默认启用 KCP */
 
     if (gw->max_conns <= 0) gw->max_conns = CE_GW_DEFAULT_MAX_CONNS;
     if (gw->heartbeat_interval_ms <= 0) gw->heartbeat_interval_ms = CE_GW_HEARTBEAT_INTERVAL_MS;
@@ -595,8 +810,29 @@ CeGateway* ce_gateway_create(const CeGatewayConfig* config) {
         return NULL;
     }
 
-    CE_LOG_INFO("GATEWAY", "Gateway created: port=%d, max_conns=%d, backend=%s, queue_depth=%d",
-                gw->port, gw->max_conns, ce_async_backend_name(), CE_GW_QUEUE_DEPTH);
+    /* KCP 初始化: 创建 UDP socket 共用同一端口 */
+    gw->kcp_fd = -1;
+    gw->kcp_recv_buf = NULL;
+    gw->kcp_recv_pending = CE_FALSE;
+    if (gw->kcp_enabled) {
+        gw->kcp_fd = create_udp_fd(gw->port);
+        if (gw->kcp_fd < 0) {
+            CE_LOG_WARN("GATEWAY", "KCP disabled (UDP socket creation failed)");
+            gw->kcp_enabled = 0;
+        } else {
+            gw->kcp_recv_buf = (uint8_t*)malloc(CE_GW_KCP_RECV_BUF_SIZE);
+            if (!gw->kcp_recv_buf) {
+                CE_LOG_WARN("GATEWAY", "KCP disabled (recv buf alloc failed)");
+                close(gw->kcp_fd);
+                gw->kcp_fd = -1;
+                gw->kcp_enabled = 0;
+            }
+        }
+    }
+
+    CE_LOG_INFO("GATEWAY", "Gateway created: port=%d, max_conns=%d, kcp=%s, backend=%s, queue_depth=%d",
+                gw->port, gw->max_conns, gw->kcp_enabled ? "on" : "off",
+                ce_async_backend_name(), CE_GW_QUEUE_DEPTH);
 
     return gw;
 }
@@ -604,10 +840,12 @@ CeGateway* ce_gateway_create(const CeGatewayConfig* config) {
 void ce_gateway_destroy(CeGateway* gw) {
     if (!gw) return;
 
-    /* 关闭所有连接 */
+    /* 关闭所有连接 (KCP 连接不关闭共享的 kcp_fd) */
     for (int i = 0; i < gw->conn_capacity; i++) {
         if (gw->conns[i]) {
-            if (gw->conns[i]->fd >= 0) close(gw->conns[i]->fd);
+            if (gw->conns[i]->protocol == CE_GW_PROTO_TCP && gw->conns[i]->fd >= 0) {
+                close(gw->conns[i]->fd);
+            }
             conn_destroy(gw->conns[i]);
             gw->conns[i] = NULL;
         }
@@ -619,6 +857,16 @@ void ce_gateway_destroy(CeGateway* gw) {
         CeGatewayBackend* be = &gw->backends[i];
         if (be->fd >= 0) close(be->fd);
         free(be->recv_buf);
+    }
+
+    /* 关闭 KCP UDP socket 和接收缓冲区 */
+    if (gw->kcp_recv_buf) {
+        free(gw->kcp_recv_buf);
+        gw->kcp_recv_buf = NULL;
+    }
+    if (gw->kcp_fd >= 0) {
+        close(gw->kcp_fd);
+        gw->kcp_fd = -1;
     }
 
     /* 关闭异步 I/O */
@@ -656,6 +904,7 @@ CeResult ce_gateway_run(CeGateway* gw) {
 
     gw->running = CE_TRUE;
     g_stop_flag = 0;
+    g_active_gw = gw;  /* 供 KCP output callback 使用 */
 
     /* 连接后端 */
     connect_backends(gw);
@@ -663,8 +912,15 @@ CeResult ce_gateway_run(CeGateway* gw) {
     /* 提交初始 accept (始终有一个 accept 在飞行) */
     ce_async_accept(gw->io, gw->listen_fd, NULL);
 
-    CE_LOG_INFO("GATEWAY", "Gateway event loop started (backend=%s)",
-                ce_async_backend_name());
+    /* 提交初始 KCP UDP recv (如果启用) */
+    if (gw->kcp_enabled && gw->kcp_fd >= 0 && gw->kcp_recv_buf) {
+        ce_async_recv(gw->io, gw->kcp_fd, gw->kcp_recv_buf,
+                      CE_GW_KCP_RECV_BUF_SIZE, NULL);  /* user_data=NULL 标识 KCP recv */
+        gw->kcp_recv_pending = CE_TRUE;
+    }
+
+    CE_LOG_INFO("GATEWAY", "Gateway event loop started (backend=%s, kcp=%s)",
+                ce_async_backend_name(), gw->kcp_enabled ? "on" : "off");
 
     /* ==================== 主事件循环 ==================== */
     while (gw->running && !g_stop_flag) {
@@ -731,6 +987,27 @@ CeResult ce_gateway_run(CeGateway* gw) {
 
             /* ---- 客户端数据到达 ---- */
             case CE_ASYNC_RECV: {
+                /* 检查是否是 KCP UDP recv 事件 (user_data=NULL, fd=kcp_fd) */
+                if (gw->kcp_enabled && gw->kcp_fd >= 0 && ev->fd == gw->kcp_fd) {
+                    gw->kcp_recv_pending = CE_FALSE;
+                    if (ev->nbytes > 0) {
+                        /* 使用 recvfrom 获取对端地址 */
+                        struct sockaddr_in peer_addr;
+                        socklen_t addr_len = sizeof(peer_addr);
+                        int n = recvfrom(gw->kcp_fd, gw->kcp_recv_buf,
+                                         CE_GW_KCP_RECV_BUF_SIZE, 0,
+                                         (struct sockaddr*)&peer_addr, &addr_len);
+                        if (n > 0) {
+                            handle_kcp_recv(gw, gw->kcp_recv_buf, n, &peer_addr);
+                        }
+                    }
+                    /* 重新提交 KCP recv */
+                    ce_async_recv(gw->io, gw->kcp_fd, gw->kcp_recv_buf,
+                                  CE_GW_KCP_RECV_BUF_SIZE, NULL);
+                    gw->kcp_recv_pending = CE_TRUE;
+                    break;
+                }
+
                 CeGatewayConn* conn = (CeGatewayConn*)ev->user_data;
                 if (!conn) break;
 
@@ -830,6 +1107,11 @@ CeResult ce_gateway_run(CeGateway* gw) {
             }
         }
 
+        /* KCP 状态机定时驱动 (利用事件循环 1s timeout 间隙) */
+        if (gw->kcp_enabled) {
+            kcp_update_all(gw);
+        }
+
         /* 心跳检查 (利用 timeout 间隙) */
         check_heartbeats(gw);
 
@@ -861,10 +1143,10 @@ CeResult ce_gateway_run(CeGateway* gw) {
 
     CE_LOG_INFO("GATEWAY", "Gateway event loop stopped");
 
-    /* 优雅关闭：关闭所有客户端连接 */
+    /* 优雅关闭：关闭所有客户端连接 (TCP 关闭 fd, KCP 只销毁上下文) */
     for (int i = 0; i < gw->conn_capacity; i++) {
         if (gw->conns[i]) {
-            if (gw->conns[i]->fd >= 0) {
+            if (gw->conns[i]->protocol == CE_GW_PROTO_TCP && gw->conns[i]->fd >= 0) {
                 ce_async_close(gw->io, gw->conns[i]->fd);
                 gw->conns[i]->fd = -1;
             }
@@ -873,6 +1155,9 @@ CeResult ce_gateway_run(CeGateway* gw) {
         }
     }
     gw->conn_count = 0;
+
+    /* 清除全局引用 */
+    g_active_gw = NULL;
 
     /* 提交最后的 close 请求 */
     ce_async_submit(gw->io);
