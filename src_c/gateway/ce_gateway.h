@@ -88,9 +88,18 @@ typedef enum CeGatewayConnState {
     CE_GW_CONN_CLOSING   = 2,   /* 正在关闭 */
 } CeGatewayConnState;
 
-/** 协议类型：0=TCP, 1=KCP */
+/** 协议类型：0=TCP, 1=KCP, 2=WebSocket */
 #define CE_GW_PROTO_TCP  0
 #define CE_GW_PROTO_KCP  1
+#define CE_GW_PROTO_WS   2  /* WebSocket (复用 TCP socket) */
+
+/* ---- WebSocket 相关常量 ---- */
+
+/** WebSocket 握手缓冲区大小 */
+#define CE_GW_WS_HANDSHAKE_BUF_SIZE  4096
+
+/** WebSocket 握手 magic GUID (RFC 6455) */
+#define CE_GW_WS_MAGIC  "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 /* ================================================================
  * 客户端连接上下文
@@ -108,11 +117,13 @@ typedef struct CeGatewayConn {
     int                  send_len;      /* 待发送数据长度 */
     CeBool               recv_pending;  /* 是否已有 recv 在飞行 */
     /* ---- KCP 专属字段 ---- */
-    int                  protocol;      /* 0=TCP, 1=KCP */
+    int                  protocol;      /* 0=TCP, 1=KCP, 2=WebSocket */
     struct sockaddr_in   peer_addr;     /* KCP: 对端地址 (用于 sendto) */
     CeKcpContext*        kcp_ctx;       /* KCP: 协议栈上下文 (TCP 连接为 NULL) */
     uint32_t             kcp_conv;      /* KCP: 会话 ID (conv) */
     char                 addr[64];      /* KCP: 对端地址字符串 "IP:Port" */
+    /* ---- WebSocket 专属字段 ---- */
+    int                  ws_state;      /* WS 状态：0=等待握手, 1=已升级, -1=不是WS */
 } CeGatewayConn;
 
 /* ================================================================
@@ -158,6 +169,7 @@ typedef struct CeGateway {
     uint64_t             last_backend_reconnect_us; /* 上次后端重连时间 */
 
     CeBool               running;          /* 事件循环运行标志 */
+    CeBool               ws_enabled;       /* 是否启用 WebSocket */
 } CeGateway;
 
 /* ================================================================
@@ -170,6 +182,7 @@ typedef struct CeGatewayConfig {
     int          heartbeat_interval_ms;    /* 心跳间隔 */
     int          heartbeat_timeout_ms;     /* 心跳超时 */
     int          kcp_enabled;              /* 是否启用 KCP (1=启用, 0=禁用) */
+    int          ws_enabled;               /* 是否启用 WebSocket (1=启用, 0=禁用) */
 } CeGatewayConfig;
 
 /* ================================================================
