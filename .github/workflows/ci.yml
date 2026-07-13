@@ -69,15 +69,16 @@ jobs:
         run: cd build && ctest --output-on-failure -j$(nproc)
 
       - name: 冒烟测试
+        shell: bash
         run: |
           echo "=== 验证编译产物 ==="
-          test -f build/bin/chaos_server && echo "chaos_server OK" || echo "chaos_server MISSING"
-          test -f build/bin/chaos_client && echo "chaos_client OK" || echo "chaos_client SKIPPED (no Vulkan)"
-          test -f build/bin/chaos_gateway && echo "chaos_gateway OK" || echo "chaos_gateway MISSING"
-          test -f build/bin/chaos_router && echo "chaos_router OK" || echo "chaos_router MISSING"
-          test -f build/bin/chaos_dbproxy && echo "chaos_dbproxy OK" || echo "chaos_dbproxy MISSING"
-          # 核心服务端必须存在
-          test -f build/bin/chaos_server || { echo "::error::chaos_server not found"; exit 1; }
+          ls build/bin/ 2>/dev/null || echo "build/bin 目录不存在"
+          if [ -f build/bin/chaos_server ]; then
+            echo "chaos_server OK"
+          else
+            echo "::error::chaos_server not found"
+            exit 1
+          fi
 
   # ── Job 2: Release 编译验证 ──
   release-build:
