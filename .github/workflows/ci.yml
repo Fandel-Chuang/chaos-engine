@@ -151,6 +151,41 @@ jobs:
             exit 1
           fi
 
+  # ── Job 5: Gateway 集成测试 (Phase 4) ──
+  gateway-test:
+    name: Gateway 集成测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            cmake build-essential \
+            liblua5.4-dev liburing-dev libbpf-dev \
+            libvulkan-dev libx11-dev \
+            flatbuffers-compiler
+
+      - name: 编译 Gateway
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Debug
+          make -k -j$(nproc) chaos_gateway
+          test -f bin/chaos_gateway || { echo "::error::chaos_gateway 编译失败"; exit 1; }
+
+      - name: 运行 Gateway 测试
+        run: |
+          for f in tests/gateway/test_tcp.py tests/gateway/test_kcp.py tests/gateway/test_websocket.py \
+                   tests/gateway/test_conn_mgmt.py tests/gateway/test_router.py tests/gateway/test_perf.py; do
+            echo "=== 运行 $f ==="
+            python3 "$f" || { echo "::error::$f 失败"; exit 1; }
+          done
+          echo "✅ Gateway 集成测试全部通过"
+
   # ── Job 4: 内存检查 (Valgrind) ──
   memcheck:
     name: 内存检查 (Valgrind)

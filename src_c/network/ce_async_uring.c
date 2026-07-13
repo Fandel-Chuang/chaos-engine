@@ -46,7 +46,10 @@ struct CeAsyncContext {
 /* ---- 操作上下文管理 ---- */
 
 static CeAsyncOpCtx* alloc_op_ctx(CeAsyncContext* ctx) {
-    if (ctx->op_ctx_used >= CE_ASYNC_MAX_EVENTS) return NULL;
+    if (ctx->op_ctx_used >= CE_ASYNC_MAX_EVENTS) {
+        /* 池满，回收（此时上一轮 CQE 已全部处理完） */
+        ctx->op_ctx_used = 0;
+    }
     return &ctx->op_ctx_pool[ctx->op_ctx_used++];
 }
 
@@ -219,7 +222,8 @@ int ce_async_wait(CeAsyncContext* ctx, int min_events, int timeout_ms) {
     }
 
     ctx->event_count = count;
-    reset_op_ctx(ctx);
+    /* 不在这里 reset_op_ctx -- 可能有飞行中的 SQE 引用 op_ctx_pool。
+       op_ctx_pool 在 alloc_op_ctx 满时自动 wrap around。 */
     return count;
 }
 
