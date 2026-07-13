@@ -38,16 +38,32 @@ jobs:
       - name: CMake 配置
         run: |
           mkdir -p build && cd build
-          echo "=== third_party 检查 ==="
-          ls -la ../third_party/lua/lib/ 2>/dev/null || echo "third_party/lua/lib 不存在"
-          ls -la ../third_party/vulkan/lib/ 2>/dev/null || echo "third_party/vulkan/lib 不存在"
-          file ../third_party/lua/lib/liblua5.4.so 2>/dev/null || echo "liblua5.4.so 不存在"
-          readlink -f ../third_party/lua/lib/liblua5.4.so 2>/dev/null || echo "readlink 失败"
-          echo "=== CMake 配置 ==="
-          cmake .. -DCMAKE_BUILD_TYPE=Debug
+          {
+            echo "### third_party 诊断"
+            echo '```'
+            ls -la ../third_party/lua/lib/ 2>/dev/null || echo "third_party/lua/lib 不存在"
+            ls -la ../third_party/vulkan/lib/ 2>/dev/null || echo "third_party/vulkan/lib 不存在"
+            file ../third_party/lua/lib/liblua5.4.so 2>/dev/null || echo "liblua5.4.so 不存在"
+            readlink -f ../third_party/lua/lib/liblua5.4.so 2>/dev/null || echo "readlink 失败"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+          cmake .. -DCMAKE_BUILD_TYPE=Debug 2>&1 | tee /tmp/cmake_output.txt
+          {
+            echo "### CMake 输出"
+            echo '```'
+            cat /tmp/cmake_output.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: 编译
-        run: cd build && make VERBOSE=1 -j$(nproc)
+        run: |
+          cd build && make VERBOSE=1 -j$(nproc) 2>&1 | tee /tmp/make_output.txt
+          {
+            echo "### 编译输出（最后50行）"
+            echo '```'
+            tail -50 /tmp/make_output.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
 
       - name: 全量测试
         run: cd build && ctest --output-on-failure -j$(nproc)
