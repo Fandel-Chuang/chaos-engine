@@ -28,11 +28,12 @@ static void print_usage(const char* prog) {
     fprintf(stderr,
         "Usage: %s [OPTIONS]\n\n"
         "Options:\n"
-        "  --port PORT               TCP listen port (default: 9000)\n"
+        "  --port PORT               TCP+KCP listen port (default: 9000)\n"
         "  --backend HOST:PORT       Backend Game service address (default: 127.0.0.1:7777)\n"
         "  --max-connections N       Max client connections (default: 10000)\n"
         "  --heartbeat-interval MS   Heartbeat interval in ms (default: 30000)\n"
         "  --heartbeat-timeout MS    Heartbeat timeout in ms (default: 90000)\n"
+        "  --no-kcp                  Disable KCP protocol (TCP only)\n"
         "  --help, -h                Show this help\n",
         prog);
 }
@@ -45,6 +46,7 @@ int main(int argc, char** argv) {
     gw_cfg.max_connections = CE_GW_DEFAULT_MAX_CONNS;
     gw_cfg.heartbeat_interval_ms = CE_GW_HEARTBEAT_INTERVAL_MS;
     gw_cfg.heartbeat_timeout_ms = CE_GW_HEARTBEAT_TIMEOUT_MS;
+    gw_cfg.kcp_enabled = 1;  /* 默认启用 KCP */
 
     /* 后端地址 (可被命令行覆盖) */
     const char* backend_host = "127.0.0.1";
@@ -75,6 +77,8 @@ int main(int argc, char** argv) {
             gw_cfg.heartbeat_timeout_ms = atoi(argv[++i]);
             if (gw_cfg.heartbeat_timeout_ms <= 0)
                 gw_cfg.heartbeat_timeout_ms = CE_GW_HEARTBEAT_TIMEOUT_MS;
+        } else if (strcmp(argv[i], "--no-kcp") == 0) {
+            gw_cfg.kcp_enabled = 0;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -118,7 +122,8 @@ int main(int argc, char** argv) {
     printf("========================================\n");
     printf("  ChaosEngine Gateway (io_uring)\n");
     printf("  Backend: %s\n", ce_async_backend_name());
-    printf("  Listen:  0.0.0.0:%d\n", gw_cfg.port);
+    printf("  Listen:  0.0.0.0:%d (%s)\n", gw_cfg.port,
+           gw_cfg.kcp_enabled ? "TCP+KCP" : "TCP only");
     printf("  Backend: %s:%d\n", backend_host, backend_port);
     printf("  MaxConns: %d\n", gw_cfg.max_connections);
     printf("  HB: interval=%dms timeout=%dms\n",

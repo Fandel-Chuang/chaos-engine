@@ -48,12 +48,13 @@ static void usage(const char* prog)
     fprintf(stderr,
         "Usage: %s [OPTIONS]\n\n"
         "Options:\n"
-        "  --port PORT               TCP listen port (default: %d)\n"
+        "  --port PORT               TCP+KCP listen port (default: %d)\n"
         "  --backend HOST:PORT       Backend Game service address\n"
         "                            (default: 127.0.0.1:7777, can repeat)\n"
         "  --max-connections N       Max client connections (default: %d)\n"
         "  --heartbeat-interval MS   Heartbeat interval in ms (default: %d)\n"
         "  --heartbeat-timeout MS    Heartbeat timeout in ms (default: %d)\n"
+        "  --no-kcp                  Disable KCP protocol (TCP only)\n"
         "  --help, -h                Show this help\n",
         prog,
         CE_GW_DEFAULT_PORT,
@@ -71,6 +72,7 @@ int main(int argc, char** argv)
     gw_cfg.max_connections = CE_GW_DEFAULT_MAX_CONNS;
     gw_cfg.heartbeat_interval_ms = CE_GW_HEARTBEAT_INTERVAL_MS;
     gw_cfg.heartbeat_timeout_ms = CE_GW_HEARTBEAT_TIMEOUT_MS;
+    gw_cfg.kcp_enabled = 1;  /* 默认启用 KCP */
 
     /* 后端地址列表 (最多 CE_GW_MAX_BACKENDS 个) */
     const char* backend_hosts[CE_GW_MAX_BACKENDS];
@@ -125,6 +127,8 @@ int main(int argc, char** argv)
             gw_cfg.heartbeat_timeout_ms = atoi(argv[++i]);
             if (gw_cfg.heartbeat_timeout_ms <= 0)
                 gw_cfg.heartbeat_timeout_ms = CE_GW_HEARTBEAT_TIMEOUT_MS;
+        } else if (strcmp(argv[i], "--no-kcp") == 0) {
+            gw_cfg.kcp_enabled = 0;
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             usage(argv[0]);
@@ -176,7 +180,8 @@ int main(int argc, char** argv)
     printf("========================================\n");
     printf("  ChaosEngine C Gateway (io_uring)\n");
     printf("  Backend: %s\n", ce_async_backend_name());
-    printf("  Listen:  0.0.0.0:%d\n", gw_cfg.port);
+    printf("  Listen:  0.0.0.0:%d (%s)\n", gw_cfg.port,
+           gw_cfg.kcp_enabled ? "TCP+KCP" : "TCP only");
     for (int i = 0; i < backend_count; i++) {
         printf("  Backend[%d]: %s:%d\n", i, backend_hosts[i], backend_ports[i]);
     }

@@ -16,8 +16,10 @@
 
 #include "public_api/ce_types.h"
 #include "network/ce_async_io.h"
+#include "network/ce_kcp.h"
 
 #include <stdint.h>
+#include <netinet/in.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -73,6 +75,9 @@ typedef enum CeGatewayMsgType {
     CE_GW_MSG_DISCONNECT = 0xFFFF,
 } CeGatewayMsgType;
 
+/** KCP 接收缓冲区大小 */
+#define CE_GW_KCP_RECV_BUF_SIZE  (1500)
+
 /* ================================================================
  * 连接状态
  * ================================================================ */
@@ -83,12 +88,16 @@ typedef enum CeGatewayConnState {
     CE_GW_CONN_CLOSING   = 2,   /* 正在关闭 */
 } CeGatewayConnState;
 
+/** 协议类型：0=TCP, 1=KCP */
+#define CE_GW_PROTO_TCP  0
+#define CE_GW_PROTO_KCP  1
+
 /* ================================================================
  * 客户端连接上下文
  * ================================================================ */
 
 typedef struct CeGatewayConn {
-    int                  fd;            /* 客户端 socket fd */
+    int                  fd;            /* 客户端 socket fd (KCP 连接复用 kcp_fd) */
     uint64_t             conn_id;       /* 唯一连接 ID */
     uint64_t             connect_time_us; /* 连接建立时间 */
     uint64_t             last_active_us;   /* 最后活跃时间 */
@@ -98,6 +107,12 @@ typedef struct CeGatewayConn {
     uint8_t*             send_buf;      /* 发送缓冲区 (CE_GW_SEND_BUF_SIZE) */
     int                  send_len;      /* 待发送数据长度 */
     CeBool               recv_pending;  /* 是否已有 recv 在飞行 */
+    /* ---- KCP 专属字段 ---- */
+    int                  protocol;      /* 0=TCP, 1=KCP */
+    struct sockaddr_in   peer_addr;     /* KCP: 对端地址 (用于 sendto) */
+    CeKcpContext*        kcp_ctx;       /* KCP: 协议栈上下文 (TCP 连接为 NULL) */
+    uint32_t             kcp_conv;      /* KCP: 会话 ID (conv) */
+    char                 addr[64];      /* KCP: 对端地址字符串 "IP:Port" */
 } CeGatewayConn;
 
 /* ================================================================
@@ -121,10 +136,14 @@ typedef struct CeGatewayBackend {
 
 typedef struct CeGateway {
     CeAsyncContext*      io;               /* io_uring 异步 I/O 上下文 */
-    int                  listen_fd;        /* 监听 socket fd */
-    int                  port;             /* 监听端口 */
+    int                  listen_fd;        /* TCP 监听 socket fd */
+    int                  port;             /* 监听端口 (TCP+KCP 共用) */
+    int                  kcp_fd;           /* KCP/UDP socket fd (-1 = 未启用) */
+    int                  kcp_enabled;      /* 是否启用 KCP */
+    uint8_t*             kcp_recv_buf;     /* KCP UDP recv 缓冲区 */
+    CeBool               kcp_recv_pending; /* 是否已有 KCP recv 在飞行 */
 
-    CeGatewayConn**      conns;            /* 连接指针数组 */
+    CeGatewayConn**      conns;            /* 连接指针数组 (TCP+KCP 共用) */
     int                  conn_count;       /* 当前活跃连接数 */
     int                  max_conns;        /* 最大连接数 */
     int                  conn_capacity;    /* 数组容量 */
@@ -150,6 +169,7 @@ typedef struct CeGatewayConfig {
     int          max_connections;          /* 最大连接数 */
     int          heartbeat_interval_ms;    /* 心跳间隔 */
     int          heartbeat_timeout_ms;     /* 心跳超时 */
+    int          kcp_enabled;              /* 是否启用 KCP (1=启用, 0=禁用) */
 } CeGatewayConfig;
 
 /* ================================================================
