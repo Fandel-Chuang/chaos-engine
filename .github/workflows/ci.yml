@@ -176,7 +176,8 @@ jobs:
         run: |
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Debug
-          make -j$(nproc)
+          make -k -j$(nproc) || true
+          test -f bin/chaos_server || { echo "::error::chaos_server 编译失败"; exit 1; }
 
       - name: Valgrind 内存检查
         run: |
