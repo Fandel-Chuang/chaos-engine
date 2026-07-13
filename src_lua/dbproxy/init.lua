@@ -433,6 +433,15 @@ end
 -- Stats Reporter Coroutine
 -- ============================================================
 
+-- Helper: count table entries (定义在使用前)
+local function table_count(tbl)
+    local n = 0
+    for _ in pairs(tbl) do
+        n = n + 1
+    end
+    return n
+end
+
 local function stats_reporter_loop()
     while true do
         sleep(10)  -- Every 10 seconds
@@ -448,15 +457,6 @@ local function stats_reporter_loop()
             hb_stats.peer and (hb_stats.peer.alive and "alive" or "dead") or "none"
         ))
     end
-end
-
--- Helper: count table entries
-local function table_count(tbl)
-    local n = 0
-    for _ in pairs(tbl) do
-        n = n + 1
-    end
-    return n
 end
 
 -- ============================================================
