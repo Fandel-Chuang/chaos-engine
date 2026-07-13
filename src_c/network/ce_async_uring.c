@@ -23,39 +23,39 @@
 
 /* ---- 内部结构 ---- */
 
-#define CE_ASYNC_MAX_EVENTS 256
+#define CE_ASYNC_MAX_EVENTS 16384
 
-/** 每个异步操作携带的上下文 */
-typedef struct CeAsyncOpCtx {
-    CeAsyncEventType type;
-    int              fd;
-    void*            buf;
-    void*            user_data;
-} CeAsyncOpCtx;
+/* io_uring user_data 编码方案：
+ *   低 48 位存 user_data 指针（应用层传入）
+ *   高 16 位存 CeAsyncEventType
+ * 这样不再需要 op_ctx_pool，彻底解决飞行中 op_ctx 被覆盖的问题。
+ */
+#define CE_UD_TYPE_SHIFT  48
+#define CE_UD_TYPE_MASK   0xFFFFULL
+#define CE_UD_PTR_MASK    0xFFFFFFFFFFFFULL
+
+static inline uint64_t ce_ud_encode(CeAsyncEventType type, void* user_data) {
+    return ((uint64_t)type << CE_UD_TYPE_SHIFT) | ((uint64_t)(uintptr_t)user_data & CE_UD_PTR_MASK);
+}
+
+static inline CeAsyncEventType ce_ud_type(uint64_t ud) {
+    return (CeAsyncEventType)((ud >> CE_UD_TYPE_SHIFT) & CE_UD_TYPE_MASK);
+}
+
+static inline void* ce_ud_ptr(uint64_t ud) {
+    return (void*)(uintptr_t)(ud & CE_UD_PTR_MASK);
+}
 
 struct CeAsyncContext {
     struct io_uring  ring;
     CeAsyncEvent     events[CE_ASYNC_MAX_EVENTS];
     int              event_count;
     int              pending_count;
-    CeAsyncOpCtx     op_ctx_pool[CE_ASYNC_MAX_EVENTS];
-    int              op_ctx_used;
     CeBool           buffers_registered;
 };
 
 /* ---- 操作上下文管理 ---- */
-
-static CeAsyncOpCtx* alloc_op_ctx(CeAsyncContext* ctx) {
-    if (ctx->op_ctx_used >= CE_ASYNC_MAX_EVENTS) {
-        /* 池满，回收（此时上一轮 CQE 已全部处理完） */
-        ctx->op_ctx_used = 0;
-    }
-    return &ctx->op_ctx_pool[ctx->op_ctx_used++];
-}
-
-static void reset_op_ctx(CeAsyncContext* ctx) {
-    ctx->op_ctx_used = 0;
-}
+/* op_ctx_pool 已移除，改用 user_data 编码方案 */
 
 /* ---- 生命周期 ---- */
 
@@ -91,67 +91,47 @@ void ce_async_shutdown(CeAsyncContext* ctx) {
 /* ---- 操作提交 ---- */
 
 void ce_async_accept(CeAsyncContext* ctx, int listen_fd, void* user_data) {
-    CeAsyncOpCtx* op = alloc_op_ctx(ctx);
-    if (!op) { CE_LOG_WARN("ASYNC", "Op ctx pool full"); return; }
-    op->type = CE_ASYNC_ACCEPT; op->fd = listen_fd; op->user_data = user_data;
-
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ctx->ring);
     if (!sqe) { CE_LOG_WARN("ASYNC", "SQ full"); return; }
 
     io_uring_prep_accept(sqe, listen_fd, NULL, NULL, 0);
-    io_uring_sqe_set_data(sqe, op);
+    io_uring_sqe_set_data64(sqe, ce_ud_encode(CE_ASYNC_ACCEPT, user_data));
     ctx->pending_count++;
 }
 
 void ce_async_recv(CeAsyncContext* ctx, int fd, void* buf, int size, void* user_data) {
-    CeAsyncOpCtx* op = alloc_op_ctx(ctx);
-    if (!op) { CE_LOG_WARN("ASYNC", "Op ctx pool full"); return; }
-    op->type = CE_ASYNC_RECV; op->fd = fd; op->buf = buf; op->user_data = user_data;
-
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ctx->ring);
     if (!sqe) { CE_LOG_WARN("ASYNC", "SQ full"); return; }
 
     io_uring_prep_recv(sqe, fd, buf, size, 0);
-    io_uring_sqe_set_data(sqe, op);
+    io_uring_sqe_set_data64(sqe, ce_ud_encode(CE_ASYNC_RECV, user_data));
     ctx->pending_count++;
 }
 
 void ce_async_send(CeAsyncContext* ctx, int fd, const void* buf, int size, void* user_data) {
-    CeAsyncOpCtx* op = alloc_op_ctx(ctx);
-    if (!op) { CE_LOG_WARN("ASYNC", "Op ctx pool full"); return; }
-    op->type = CE_ASYNC_SEND; op->fd = fd; op->buf = (void*)buf; op->user_data = user_data;
-
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ctx->ring);
     if (!sqe) { CE_LOG_WARN("ASYNC", "SQ full"); return; }
 
     io_uring_prep_send(sqe, fd, buf, size, 0);
-    io_uring_sqe_set_data(sqe, op);
+    io_uring_sqe_set_data64(sqe, ce_ud_encode(CE_ASYNC_SEND, user_data));
     ctx->pending_count++;
 }
 
 void ce_async_read(CeAsyncContext* ctx, int fd, void* buf, int size, off_t offset, void* user_data) {
-    CeAsyncOpCtx* op = alloc_op_ctx(ctx);
-    if (!op) { CE_LOG_WARN("ASYNC", "Op ctx pool full"); return; }
-    op->type = CE_ASYNC_READ; op->fd = fd; op->buf = buf; op->user_data = user_data;
-
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ctx->ring);
     if (!sqe) { CE_LOG_WARN("ASYNC", "SQ full"); return; }
 
     io_uring_prep_read(sqe, fd, buf, size, offset);
-    io_uring_sqe_set_data(sqe, op);
+    io_uring_sqe_set_data64(sqe, ce_ud_encode(CE_ASYNC_READ, user_data));
     ctx->pending_count++;
 }
 
 void ce_async_close(CeAsyncContext* ctx, int fd) {
-    CeAsyncOpCtx* op = alloc_op_ctx(ctx);
-    if (!op) { close(fd); return; }
-    op->type = CE_ASYNC_CLOSE; op->fd = fd;
-
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ctx->ring);
     if (!sqe) { close(fd); return; }
 
     io_uring_prep_close(sqe, fd);
-    io_uring_sqe_set_data(sqe, op);
+    io_uring_sqe_set_data64(sqe, ce_ud_encode(CE_ASYNC_CLOSE, NULL));
     ctx->pending_count++;
 }
 
@@ -175,14 +155,14 @@ int ce_async_wait(CeAsyncContext* ctx, int min_events, int timeout_ms) {
         if (ret == -EAGAIN) break;
         if (ret < 0) { CE_LOG_ERROR("ASYNC", "peek_cqe: %d", ret); return -1; }
 
-        CeAsyncOpCtx* op = (CeAsyncOpCtx*)io_uring_cqe_get_data(cqe);
+        uint64_t ud = io_uring_cqe_get_data64(cqe);
         CeAsyncEvent* ev = &ctx->events[count];
-        ev->type      = op ? op->type : CE_ASYNC_ERROR;
-        ev->fd        = op ? op->fd : -1;
-        ev->user_data = op ? op->user_data : NULL;
+        ev->type      = ce_ud_type(ud);
+        ev->user_data = ce_ud_ptr(ud);
         ev->error     = cqe->res < 0 ? -cqe->res : 0;
         ev->client_fd = (ev->type == CE_ASYNC_ACCEPT && cqe->res >= 0) ? cqe->res : -1;
         ev->nbytes    = (ev->type != CE_ASYNC_ACCEPT && cqe->res >= 0) ? cqe->res : 0;
+        ev->fd        = -1; /* fd 不再编码在 user_data 中，由调用方通过 user_data 找回 */
 
         io_uring_cqe_seen(&ctx->ring, cqe);
         count++;
@@ -207,14 +187,14 @@ int ce_async_wait(CeAsyncContext* ctx, int min_events, int timeout_ms) {
             if (ret == -EAGAIN) break;
             if (ret < 0) break;
 
-            CeAsyncOpCtx* op = (CeAsyncOpCtx*)io_uring_cqe_get_data(cqe);
+            uint64_t ud = io_uring_cqe_get_data64(cqe);
             CeAsyncEvent* ev = &ctx->events[count];
-            ev->type      = op ? op->type : CE_ASYNC_ERROR;
-            ev->fd        = op ? op->fd : -1;
-            ev->user_data = op ? op->user_data : NULL;
+            ev->type      = ce_ud_type(ud);
+            ev->user_data = ce_ud_ptr(ud);
             ev->error     = cqe->res < 0 ? -cqe->res : 0;
             ev->client_fd = (ev->type == CE_ASYNC_ACCEPT && cqe->res >= 0) ? cqe->res : -1;
             ev->nbytes    = (ev->type != CE_ASYNC_ACCEPT && cqe->res >= 0) ? cqe->res : 0;
+            ev->fd        = -1;
 
             io_uring_cqe_seen(&ctx->ring, cqe);
             count++;
@@ -222,8 +202,6 @@ int ce_async_wait(CeAsyncContext* ctx, int min_events, int timeout_ms) {
     }
 
     ctx->event_count = count;
-    /* 不在这里 reset_op_ctx -- 可能有飞行中的 SQE 引用 op_ctx_pool。
-       op_ctx_pool 在 alloc_op_ctx 满时自动 wrap around。 */
     return count;
 }
 

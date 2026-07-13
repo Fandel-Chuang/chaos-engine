@@ -1466,8 +1466,8 @@ CeResult ce_gateway_run(CeGateway* gw) {
 
             /* ---- 客户端数据到达 ---- */
             case CE_ASYNC_RECV: {
-                /* 检查是否是 KCP UDP recv 事件 (user_data=NULL, fd=kcp_fd) */
-                if (gw->kcp_enabled && gw->kcp_fd >= 0 && ev->fd == gw->kcp_fd) {
+                /* 检查是否是 KCP UDP recv 事件 (user_data=NULL) */
+                if (gw->kcp_enabled && gw->kcp_fd >= 0 && ev->user_data == NULL) {
                     gw->kcp_recv_pending = CE_FALSE;
                     if (ev->nbytes > 0) {
                         /* 使用 recvfrom 获取对端地址 */
