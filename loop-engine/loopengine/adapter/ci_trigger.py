@@ -96,6 +96,9 @@ class CITrigger:
         branch = branch or self.trigger_branch
 
         if self.use_github:
+            # 推到临时分支触发 CI，不污染 master
+            import time as _time
+            ci_branch = f"ci/trigger-{int(_time.time())}"
             commit_msg = "loopengine: trigger CI"
             commit_proc = await asyncio.to_thread(
                 subprocess.run,
@@ -105,7 +108,7 @@ class CITrigger:
             )
             push_proc = await asyncio.to_thread(
                 subprocess.run,
-                ["git", "push", "github", branch],
+                ["git", "push", "github", f"HEAD:refs/heads/{ci_branch}"],
                 cwd=self.chaos_engine_dir,
                 capture_output=True, text=True, timeout=60,
             )
@@ -116,7 +119,16 @@ class CITrigger:
                 capture_output=True, text=True, timeout=10,
             )
             commit_sha = sha_proc.stdout.strip() if sha_proc.returncode == 0 else ""
-            return {"triggered": True, "branch": branch, "commit_sha": commit_sha, "method": "github_push"}
+            # 回退本地 master 的空 commit，保持与远端同步
+            await asyncio.to_thread(
+                subprocess.run,
+                ["git", "reset", "--hard", "HEAD~1"],
+                cwd=self.chaos_engine_dir,
+                capture_output=True, text=True, timeout=10,
+            )
+            # 临时分支用于 CI 轮询，轮询完后可删除
+            self._ci_trigger_branch = ci_branch
+            return {"triggered": True, "branch": ci_branch, "commit_sha": commit_sha, "method": "github_push"}
 
         # ── Gitee 回退路径 ──
         # 1. git commit --allow-empty
@@ -273,8 +285,9 @@ class CITrigger:
         data = resp.json()
         runs = data.get("workflow_runs", [])
         run = None
+        ci_branch = getattr(self, "_ci_trigger_branch", None) or self.trigger_branch
         for r in runs:
-            if r.get("head_branch") == self.trigger_branch:
+            if r.get("head_branch") == ci_branch:
                 run = r
                 break
         if not run and runs:
