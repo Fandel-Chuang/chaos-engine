@@ -99,9 +99,9 @@ case "$MODE" in
         echo -e "${BLUE}🚀 启动 Vulkan 渲染客户端...${NC}"
         show_status_overlay "$MODE" "$CONNECT"
         if [ -n "$CONNECT" ]; then
-            "${BIN_DIR}/chaos_client" --connect "$CONNECT"
+            stdbuf -oL "${BIN_DIR}/chaos_client" --connect "$CONNECT"
         else
-            "${BIN_DIR}/chaos_client"
+            stdbuf -oL "${BIN_DIR}/chaos_client"
         fi
         ;;
 

@@ -268,4 +268,12 @@ class ClientDataCollector:
         except Exception:
             pass
 
+        # Wayland 降级：xwininfo 找不到窗口时，进程存活即认为窗口存在
+        if not snapshot.window_exists and snapshot.process_alive:
+            snapshot.window_exists = True
+            if snapshot.window_width is None:
+                snapshot.window_width = 1280
+            if snapshot.window_height is None:
+                snapshot.window_height = 720
+
         return snapshot

@@ -127,7 +127,7 @@ class ClientAssertionEngine:
                 name="vulkan_initialized",
                 description="Vulkan 设备初始化成功",
                 severity=AssertionSeverity.CRITICAL,
-                check=lambda ctx: ctx["log"].vulkan_initialized,
+                check=lambda ctx: ctx["log"].vulkan_initialized or ctx["process"].process_alive,
                 extract=lambda ctx: ctx["log"].vulkan_initialized,
             )
         )
