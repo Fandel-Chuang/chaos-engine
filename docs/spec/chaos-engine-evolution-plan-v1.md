@@ -10,19 +10,19 @@
 
 | 阶段 | 主题 | 任务数 | 预估工期 |
 |------|------|--------|---------|
-| Phase 1 | 基础设施加固 + 微服务化 | 8 | 2-3 个月 |
+| Phase 1 | 基础设施加固 + 微服务化 | 7 | 2-3 个月 |
 | Phase 2 | 分布式能力 | 8 | 3-4 个月 |
 | Phase 3 | 性能与安全 | 6 | 2-3 个月 |
-| Phase 4 | 可观测性与运维 | 4 | 1-2 个月 |
+| Phase 4 | 可观测性与运维 | 5 | 1-2 个月 |
 | **合计** | | **26** | **8-12 个月** |
 
 ---
 
 ## Phase 1: 基础设施加固 + 微服务化（2-3 个月）
 
-> **目标：** 修复致命缺陷，使架构可水平扩展；同时引入微服务 RPC 框架，将好友/公会/邮件等功能拆分为独立微服务。
+> **目标：** 修复致命缺陷，使架构可水平扩展；同时搭建微服务基础设施（协程RPC + 服务发现 + 服务治理），为后续好友/公会/邮件等微服务提供可用的框架接口。
 
-### 1.1 DBProxy 替换 mongosh → libmongoc 原生 C 驱动
+### 1.1 DBProxy 替换 mongosh -> libmongoc 原生 C 驱动
 
 | 项 | 内容 |
 |---|---|
@@ -105,172 +105,183 @@ CeResult ce_dbproxy_batch_save(CeDbproxyCtx* ctx,
 | **优先级** | P0 |
 | **预估** | 1 周 |
 
-### 1.7 ★ 微服务 RPC 框架（协程 RPC + 服务注册/发现）
+### 1.7 ★ 微服务基础设施：协程 RPC + 服务注册/发现/治理
 
 | 项 | 内容 |
 |---|---|
-| **问题** | 当前所有游戏逻辑耦合在 Game Server 进程内，无法独立部署 |
-| **目标** | C 语言协程 RPC 框架，支持微服务独立上线/扩缩容 |
+| **问题** | 当前所有游戏逻辑耦合在 Game Server 进程内，无 RPC 框架，无法拆分独立微服务 |
+| **目标** | 搭建可用的微服务架构接口：协程 RPC + 服务注册/发现 + 服务治理（健康检查/负载均衡/熔断限流），**不实现具体业务功能** |
 | **改动文件** | 新建 `src_c/rpc/` 模块 |
 | **依赖** | 无 |
 | **优先级** | P0 |
-| **预估** | 3 周 |
+| **预估** | 4 周 |
+
+> **范围说明：** 本任务只搭建微服务框架接口（协程调度器 + RPC 传输 + 服务注册/发现 + 治理策略），提供 `echo` / `ping` 示例验证链路通畅。好友/公会/邮件等具体业务功能在框架就绪后按需实现，不在本阶段。
 
 **设计要点：**
 
-**A. 协程 RPC 核心**
+**A. 协程调度器（ucontext 实现，集成 io_uring）**
 
 ```c
-// src_c/rpc/ce_coroutine.h - 协程调度器
+// src_c/rpc/ce_coroutine.h
 typedef struct CeCoroutine CeCoroutine;
 typedef void (*CeCoEntryFn)(void* arg);
 
 CeCoroutine* ce_co_create(CeCoEntryFn fn, void* arg, size_t stack_size);
-void         ce_co_yield(void);           // 让出 CPU
-void         ce_co_resume(CeCoroutine* co);
+void         ce_co_yield(void);           // 让出 CPU，回到调度器
+void         ce_co_resume(CeCoroutine* co); // 恢复指定协程
 void         ce_co_destroy(CeCoroutine* co);
 
-// src_c/rpc/ce_rpc.h - 协程化 RPC
+// 协程调度器（集成 io_uring 事件循环）
+typedef struct CeScheduler CeScheduler;
+CeScheduler* ce_sched_create(void);
+void         ce_sched_run(CeScheduler* sched);   // 阻塞运行
+// io_uring 完成事件 → 唤醒对应挂起的协程
+void         ce_sched_on_io_complete(CeScheduler* sched, uint64_t co_id);
+```
+
+**B. 协程化 RPC（同步写法，异步执行）**
+
+```c
+// src_c/rpc/ce_rpc.h
 typedef struct CeRpcServer CeRpcServer;
 typedef struct CeRpcClient CeRpcClient;
 
-// 服务端: 注册 RPC 方法
+// RPC 处理函数签名（在服务端协程中执行）
+typedef CeResult (*CeRpcHandlerFn)(const uint8_t* req, uint32_t req_len,
+                                     uint8_t** resp, uint32_t* resp_len);
+
+// 服务端: 创建 RPC 服务并注册方法
 CeRpcServer* ce_rpc_server_create(const char* service_name, int port);
 CeResult ce_rpc_register(CeRpcServer* srv, const char* method,
                           CeRpcHandlerFn handler);
+CeResult ce_rpc_server_run(CeRpcServer* srv);  // 阻塞，内部 io_uring + 协程
 
 // 客户端: 协程化调用 (当前协程挂起等待响应，不阻塞线程)
-CeRpcClient* ce_rpc_client_create(const char* registry_addr);
+CeRpcClient* ce_rpc_client_create(CeServiceRegistry* reg);
 CeResult ce_rpc_call(CeRpcClient* cli, const char* service,
                       const char* method,
                       const uint8_t* req, uint32_t req_len,
                       uint8_t** resp, uint32_t* resp_len);
-// 异步 RPC (回调模式)
+
+// 异步 RPC (回调模式，适用于非协程上下文)
+typedef void (*CeRpcCallbackFn)(CeResult result,
+                                  const uint8_t* resp, uint32_t resp_len,
+                                  void* user_data);
 CeResult ce_rpc_call_async(CeRpcClient* cli, const char* service,
                              const char* method,
                              const uint8_t* req, uint32_t req_len,
                              CeRpcCallbackFn callback, void* user_data);
 ```
 
-**B. 服务注册/发现**
+**C. 服务注册/发现**
 
 ```c
 // src_c/rpc/ce_service_registry.h
 typedef struct CeServiceRegistry CeServiceRegistry;
 
-// 服务注册 (微服务启动时向 Registry 注册)
+// 连接注册中心 (etcd 或内置简易注册中心)
+CeServiceRegistry* ce_registry_connect(const char* addr);
+
+// 服务注册 (微服务启动时注册)
 CeResult ce_registry_register(CeServiceRegistry* reg,
                                 const char* service_name,
                                 const char* host, int port,
-                                const char* metadata);  // JSON 元数据
+                                const char* metadata);  // JSON: {"version":"1.0","weight":100}
 
-// 服务发现 (RPC 调用前查询目标地址)
+// 服务发现 (RPC 调用前查询目标地址，支持负载均衡策略)
 CeResult ce_registry_lookup(CeServiceRegistry* reg,
                               const char* service_name,
                               char* out_host, int* out_port);
 
-// 健康检查 + 自动注销
-CeResult ce_registry_heartbeat(CeServiceRegistry* reg,
-                                 const char* service_name);
+// 服务注销 (微服务下线时调用)
+CeResult ce_registry_deregister(CeServiceRegistry* reg,
+                                  const char* service_name);
 ```
 
-**C. 协程调度集成 io_uring**
+**D. 服务治理（健康检查 + 负载均衡 + 熔断限流）**
+
+```c
+// src_c/rpc/ce_governance.h
+
+// 健康检查: 注册中心定期探活，失败自动摘除
+CeResult ce_registry_health_check(CeServiceRegistry* reg,
+                                    const char* service_name);
+
+// 负载均衡策略
+typedef enum {
+    CE_LB_ROUND_ROBIN,    // 轮询
+    CE_LB_RANDOM,         // 随机
+    CE_LB_LEAST_CONN,     // 最少连接
+    CE_LB_WEIGHTED,       // 加权（按 metadata.weight）
+    CE_LB_CONSISTENT_HASH // 一致性哈希（按 entity_id 粘性）
+} CeLbStrategy;
+CeResult ce_registry_set_lb_strategy(CeServiceRegistry* reg,
+                                       const char* service_name,
+                                       CeLbStrategy strategy);
+
+// 熔断器: 连续失败 N 次自动熔断，一段时间后半开探测
+typedef struct CeCircuitBreaker CeCircuitBreaker;
+CeCircuitBreaker* ce_cb_create(int fail_threshold, int recovery_timeout_ms);
+CeBool   ce_cb_allow_request(CeCircuitBreaker* cb);  // 是否放行
+void     ce_cb_record_success(CeCircuitBreaker* cb);
+void     ce_cb_record_failure(CeCircuitBreaker* cb);
+
+// 限流器: per-service 令牌桶
+typedef struct CeRateLimiter CeRateLimiter;
+CeRateLimiter* ce_rl_create(int max_qps);
+CeBool   ce_rl_try_acquire(CeRateLimiter* rl);  // 尝试获取令牌
+```
+
+**E. 协程调度集成 io_uring**
 
 ```
-RPC 请求流程:
-  1. Game Server 协程调用 ce_rpc_call("friend_service", "get_list", ...)
-  2. 当前协程 yield 挂起，io_uring 异步发送请求
-  3. io_uring 事件循环继续处理其他连接
+RPC 请求流程（协程模式）:
+  1. Game Server 协程调用 ce_rpc_call("echo_service", "ping", ...)
+  2. RPC Client 查注册中心发现目标地址 → io_uring 异步发送请求
+  3. 当前协程 yield 挂起，io_uring 事件循环继续处理其他连接
   4. 响应到达 → io_uring 完成事件 → 唤醒挂起的协程
   5. ce_rpc_call 返回结果
 
 优势: 单线程内数万并发 RPC，不阻塞，无需回调地狱
 ```
 
+**F. 示例验证（验证链路通畅，非业务功能）**
+
+```c
+// src_c/rpc/example/echo_service.c — 内置 echo 服务，验证框架可用
+int main() {
+    CeRpcServer* srv = ce_rpc_server_create("echo_service", 9200);
+    ce_rpc_register(srv, "ping",  handle_ping);   // 返回 "pong"
+    ce_rpc_register(srv, "echo",  handle_echo);   // 原样返回
+    CeServiceRegistry* reg = ce_registry_connect("127.0.0.1:2379");
+    ce_registry_register(reg, "echo_service", "0.0.0.0", 9200, "");
+    ce_rpc_server_run(srv);
+}
+
+// src_c/rpc/example/rpc_client_test.c — 验证协程 RPC 调用链路
+void test_coroutine(CeCoroutine* co, void* arg) {
+    CeRpcClient* cli = arg;
+    uint8_t* resp; uint32_t len;
+    ce_rpc_call(cli, "echo_service", "ping", NULL, 0, &resp, &len);
+    // resp == "pong" → 链路验证通过
+    assert(strcmp((char*)resp, "pong") == 0);
+}
+```
+
 **技术选型：**
 - 协程实现: ucontext (POSIX) 或 libco (腾讯开源，C 协程库)
 - 序列化: FlatBuffers (已有依赖) 或 Protocol Buffers
 - 传输: io_uring 异步 TCP（复用现有 `ce_async_uring.c`）
-- 服务发现: etcd / 内置 Raft（与 Phase 2 Router 共识层复用）
+- 服务注册中心: etcd（生产）或内置简易注册中心（开发/测试，与 Phase 2 Router Raft 复用）
 
-### 1.8 ★ 微服务拆分：好友/公会/邮件服务独立部署
-
-| 项 | 内容 |
-|---|---|
-| **问题** | 当前 `src_lua/services/friend.lua` 耦合在 Game Server 内，无法独立扩缩容 |
-| **目标** | 好友/公会/邮件拆为独立微服务进程，通过协程 RPC 与 Game Server 通信 |
-| **改动文件** | 新建 `src_c/services/friend_service.c` `guild_service.c` `mail_service.c` |
-| **依赖** | 1.7 (RPC 框架) |
-| **优先级** | P1 |
-| **预估** | 3 周 |
-
-**架构：**
-
-```
-                 ┌──────────────────┐
-                 │   Game Server    │
-                 │   (战斗/移动/AOI) │
-                 └────────┬─────────┘
-                          │ 协程 RPC
-           ┌──────────────┼──────────────┐
-           │              │              │
-  ┌────────▼───────┐ ┌───▼────────┐ ┌──▼───────────┐
-  │ Friend Service │ │Guild Service│ │ Mail Service │
-  │ (独立进程)      │ │(独立进程)    │ │(独立进程)     │
-  │ 好友列表/申请   │ │公会管理/成员 │ │邮件收发/附件  │
-  │ 黑名单          │ │公会战        │ │系统邮件      │
-  └───────┬────────┘ └───┬────────┘ └──┬───────────┘
-          │              │              │
-          └──────────────┼──────────────┘
-                         │
-                 ┌───────▼────────┐
-                 │   Service      │
-                 │   Registry     │
-                 │   (etcd/Raft)  │
-                 └────────────────┘
-```
-
-**微服务进程模板：**
-```c
-// src_c/services/friend_service_main.c
-int main(int argc, char** argv) {
-    // 1. 初始化 RPC 服务端
-    CeRpcServer* srv = ce_rpc_server_create("friend_service", 9200);
-
-    // 2. 注册 RPC 方法
-    ce_rpc_register(srv, "get_friend_list",   handle_get_friend_list);
-    ce_rpc_register(srv, "add_friend",        handle_add_friend);
-    ce_rpc_register(srv, "remove_friend",     handle_remove_friend);
-    ce_rpc_register(srv, "get_block_list",    handle_block_list);
-
-    // 3. 连接服务注册中心
-    CeServiceRegistry* reg = ce_registry_connect("127.0.0.1:2379");
-    ce_registry_register(reg, "friend_service", "0.0.0.0", 9200, "");
-
-    // 4. 启动 io_uring 事件循环 (内置协程调度)
-    ce_rpc_server_run(srv);  // 阻塞，内部 io_uring + 协程
-    return 0;
-}
-```
-
-**Game Server 调用示例（协程模式）：**
-```c
-// Game Server 内某协程处理玩家请求
-void handle_player_get_friends(CeCoroutine* co, void* arg) {
-    uint64_t player_id = *(uint64_t*)arg;
-
-    // 协程 RPC 调用 — 当前协程挂起，不阻塞线程
-    FriendList* list;
-    CeResult ret = ce_rpc_call(g_rpc_client, "friend_service",
-                                "get_friend_list",
-                                &player_id, sizeof(player_id),
-                                (uint8_t**)&list, NULL);
-    if (ret == CE_OK) {
-        // 发送给客户端
-        send_friend_list_to_client(player_id, list);
-    }
-}
-```
+**验收标准：**
+- [ ] `echo_service` 注册到注册中心，客户端可发现并调用
+- [ ] 协程 RPC 调用链路通畅（ping → pong）
+- [ ] 异步 RPC 回调模式正常工作
+- [ ] 服务健康检查：kill echo_service 后注册中心自动摘除
+- [ ] 负载均衡：启动 3 个 echo_service 实例，请求按策略分发
+- [ ] 熔断器：模拟连续失败后自动熔断，恢复后半开探测
 
 ---
 
@@ -285,6 +296,7 @@ void handle_player_get_friends(CeCoroutine* co, void* arg) {
 | **问题** | Lua Router 单线程，高 QPS 路由查询性能不足 |
 | **目标** | 纯 C Router，io_uring 事件驱动 |
 | **改动文件** | 新建 `src_c/router/`，迁移 `src_lua/router/` 逻辑 |
+
 | **依赖** | Phase 1 |
 | **优先级** | P0 |
 | **预估** | 4 周 |
@@ -474,15 +486,141 @@ void handle_player_get_friends(CeCoroutine* co, void* arg) {
 | **优先级** | P1 |
 | **预估** | 2 周 |
 
-### 4.4 K8s 部署 + 自动扩缩容
+### 4.4 K8s 部署
 
 | 项 | 内容 |
 |---|---|
-| **目标** | Helm Chart + HPA 自动扩缩容 + 故障自愈 |
+| **目标** | Helm Chart 部署全部服务，StatefulSet 管理有状态服务 |
 | **改动文件** | 新建 `deploy/k8s/` |
 | **依赖** | Phase 2 |
 | **优先级** | P2 |
+| **预估** | 2 周 |
+
+### 4.5 ★ 自动扩缩容
+
+| 项 | 内容 |
+|---|---|
+| **问题** | 无弹性伸缩能力，高峰期服务过载、低谷期资源浪费 |
+| **目标** | 三层自动扩缩容：服务实例级 + Cell 级 + 跨区级 |
+| **改动文件** | 新建 `src_c/autoscale/ce_autoscaler.c/h` + `deploy/k8s/hpa.yaml` |
+| **依赖** | 4.2 (Prometheus 指标) + 4.4 (K8s) |
+| **优先级** | P1 |
 | **预估** | 3 周 |
+
+**三层自动扩缩容设计：**
+
+```
+┌──────────────────────────────────────────────────────┐
+│                 自动扩缩容架构                         │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  Layer 1: 服务实例级 (K8s HPA)                 │  │
+│  │  指标: CPU/Memory/QPS/连接数                    │  │
+│  │  动作: Gateway/DBProxy/微服务 Pod 自动伸缩      │  │
+│  │  实现: K8s Horizontal Pod Autoscaler            │  │
+│  └────────────────────────────────────────────────┘  │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  Layer 2: Cell 级 (引擎内部)                    │  │
+│  │  指标: Cell 实体数/CPU/tick 耗时                │  │
+│  │  动作:                                         │  │
+│  │    - 过载 → Cell 自动分裂 + 迁移到新 Game Server │  │
+│  │    - 空闲 → Cell 自动合并 + 回收 Game Server     │  │
+│  │  实现: ce_autoscaler.c (内嵌 Prometheus 推送)   │  │
+│  └────────────────────────────────────────────────┘  │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │  Layer 3: 跨区级 (全局调度)                     │  │
+│  │  指标: 区域玩家数/跨区延迟                       │  │
+│  │  动作:                                         │  │
+│  │    - 高峰 → 跨区迁移玩家到低负载区域              │  │
+│  │    - 低谷 → 合并区域减少跨区开销                  │  │
+│  │  实现: Router 全局调度器 + Anycast DNS 切换      │  │
+│  └────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
+```
+
+**API 设计：**
+
+```c
+// src_c/autoscale/ce_autoscaler.h
+
+typedef struct CeAutoscaler CeAutoscaler;
+typedef struct CeAutoscaleConfig {
+    int      check_interval_sec;     // 检查间隔（默认 30s）
+    int      cell_split_threshold;   // Cell 分裂阈值（实体数，默认 2000）
+    int      cell_merge_threshold;   // Cell 合并阈值（实体数，默认 500）
+    float    cpu_high_threshold;     // CPU 高水位（0.8 = 80%）
+    float    cpu_low_threshold;      // CPU 低水位（0.2 = 20%）
+    int      scale_up_cooldown_sec;  // 扩容冷却时间（防止抖动）
+    int      scale_down_cooldown_sec;// 缩容冷却时间
+} CeAutoscaleConfig;
+
+// 创建自动扩缩容管理器
+CeAutoscaler* ce_autoscaler_create(CeAutoscaleConfig* config,
+                                     CeCellManager* cell_mgr,
+                                     CeServiceRegistry* registry);
+
+// 主检查循环（由 Game Server 主线程定期调用）
+CeResult ce_autoscaler_tick(CeAutoscaler* scaler);
+
+// 获取当前扩缩容状态
+typedef struct CeAutoscaleStatus {
+    int     total_cells;
+    int     total_game_servers;
+    int     pending_splits;     // 等待分裂的 Cell 数
+    int     pending_merges;     // 等待合并的 Cell 数
+    float   avg_cpu_usage;      // 平均 CPU 使用率
+    float   avg_memory_usage;   // 平均内存使用率
+} CeAutoscaleStatus;
+CeResult ce_autoscaler_get_status(CeAutoscaler* scaler,
+                                    CeAutoscaleStatus* out);
+```
+
+**K8s HPA 配置：**
+
+```yaml
+# deploy/k8s/hpa-gateway.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: chaos-gateway-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: chaos-gateway
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Pods                   # 自定义指标：连接数
+    pods:
+      metric:
+        name: gateway_connections
+      target:
+        type: AverageValue
+        averageValue: "5000"
+```
+
+**验收标准：**
+- [ ] K8s HPA: Gateway Pod 在 CPU >70% 时自动扩容，<20% 时自动缩容
+- [ ] Cell 自动分裂: Cell 实体数 >2000 时自动分裂并迁移到新 Game Server
+- [ ] Cell 自动合并: Cell 实体数 <500 时自动合并并回收 Game Server
+- [ ] 扩缩容冷却: 分裂/合并后冷却期内不重复触发
+- [ ] Prometheus 自定义指标: gateway_connections / cell_entity_count 正常采集
+- [ ] 跨区调度: 区域玩家数超限时触发跨区迁移提示
 
 ---
 
@@ -494,7 +632,7 @@ Phase 1 (基础设施 + 微服务化)
 ├── 1.2 ECS 实例化 ──┬── 1.3 Cell 实例化 ── 1.4 AOI Grid ──┐
 │                    └── 1.5 复制系统动态扩容                │
 ├── 1.6 Game Server 不直接 accept                            │
-├── 1.7 ★ 微服务 RPC 框架 ─── 1.8 ★ 微服务拆分              │
+├── 1.7 ★ 微服务 RPC 框架 (协程RPC+服务治理)                     │
 │                                                            │
 Phase 2 (分布式能力)                                         │
 ├── 2.1 Router C 化 ── 2.2 Raft ── 2.3 实体路由表           │
@@ -530,7 +668,7 @@ Phase 1 内部可并行的任务组：
 组 A (数据层):  1.1 DBProxy libmongoc
 组 B (ECS/空间): 1.2 ECS 实例化 → 1.3 Cell 实例化 → 1.4 AOI Grid → 1.5 复制扩容
 组 C (网关):    1.6 Game Server 不直接 accept
-组 D (微服务):  1.7 RPC 框架 → 1.8 微服务拆分
+组 D (微服务):  1.7 协程 RPC + 服务注册/发现 + 服务治理（echo 示例验证）
 ```
 
 A/B/C/D 四组无相互依赖，可完全并行开发。
@@ -544,9 +682,8 @@ A/B/C/D 四组无相互依赖，可完全并行开发。
 | 协程库 | `src_c/rpc/ce_coroutine.c/h` | Phase 1 |
 | RPC 框架 | `src_c/rpc/ce_rpc.c/h` | Phase 1 |
 | 服务注册中心 | `src_c/rpc/ce_service_registry.c/h` | Phase 1 |
-| 好友服务 | `src_c/services/friend_service.c` | Phase 1 |
-| 公会服务 | `src_c/services/guild_service.c` | Phase 1 |
-| 邮件服务 | `src_c/services/mail_service.c` | Phase 1 |
+| 服务治理 | `src_c/rpc/ce_governance.c/h` | Phase 1 |
+| RPC 示例 | `src_c/rpc/example/echo_service.c` | Phase 1 |
 | DBProxy 原生驱动 | `src_c/dbproxy/ce_dbproxy_native.c/h` | Phase 1 |
 | Cell 管理器 | `src_c/server/ce_cell_manager.c/h` | Phase 1 |
 | Grid AOI | `src_c/server/ce_aoi_grid.c/h` | Phase 1 |
@@ -564,6 +701,7 @@ A/B/C/D 四组无相互依赖，可完全并行开发。
 | 分布式追踪 | `src_c/observability/ce_trace.c/h` | Phase 4 |
 | 指标采集 | `src_c/observability/ce_metrics.c/h` | Phase 4 |
 | K8s 部署 | `deploy/k8s/` | Phase 4 |
+| 自动扩缩容 | `src_c/autoscale/ce_autoscaler.c/h` | Phase 4 |
 
 ---
 
