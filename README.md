@@ -678,7 +678,7 @@ ChaosEngine 在设计中借鉴了以下优秀开源引擎的理念：
 |------|----------|
 | [Skynet](https://github.com/cloudwu/skynet) | Actor 并发模型、Lua 服务化 |
 | [KBEngine](https://github.com/kbengine/kbengine) | Cell 空间划分、动态 AOI |
-| [Ant Engine](https://github.com/eclipse-arch/ant) | 纯 ECS 架构、Archetype 存储 |
+| Ant Engine | 纯 ECS 架构、Archetype 存储 |
 | Unreal Engine | Actor / Component 概念、属性复制 |
 
 ---
