@@ -261,7 +261,7 @@ class TestLoop(LoopDomain):
             ctest_ok = True
             ctest_severity = AssertionSeverity.WARNING
             ctest_message = (
-                f"ctest: 数值无法获取（Gitee 免费版限制），CI 整体状态={bt_status}"
+                f"ctest: 数值无法从 CI 日志解析，CI 整体状态={bt_status}（降级通过）"
             )
         else:
             ctest_severity = AssertionSeverity.CRITICAL

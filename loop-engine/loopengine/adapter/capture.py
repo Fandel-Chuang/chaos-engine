@@ -101,6 +101,23 @@ class ScreenshotCapture:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
 
+        # 方案3: Wayland 原生截图（grim / gnome-screenshot）
+        for cmd in [
+            ["grim", output_path],
+            ["gnome-screenshot", "-f", output_path],
+        ]:
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=5,
+                    env=env,
+                )
+                if result.returncode == 0 and os.path.exists(output_path):
+                    return output_path
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+
         # 全部失败，给出清晰错误信息
         missing = []
         if not _command_exists("import"):
@@ -145,9 +162,10 @@ class ScreenshotCapture:
         """
         window_id = self.find_window(title_pattern)
         if not window_id:
-            raise RuntimeError(
-                f"截图失败：未找到标题匹配 '{title_pattern}' 的窗口。"
-            )
+            # Wayland 降级：找不到窗口 ID，用全屏截图
+            if output_path is None:
+                output_path = self._make_output_path("client")
+            return self.capture(window_id=None, output_path=output_path)
 
         if output_path is None:
             output_path = self._make_output_path("client")
@@ -202,6 +220,8 @@ class ScreenshotCapture:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
 
+        # 方案3: Wayland 降级 -- 窗口查找不可用，返回 None 让调用方降级
+        # Wayland 下 xdotool/xprop 无法枚举窗口，截图改用全屏模式
         return None
 
 

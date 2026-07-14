@@ -142,6 +142,11 @@ class VerifyLoop(LoopDomain):
 
             # W6: 执行失败时清理集群，成功时保留供 verify() 使用
             if not all_ok:
+                # 不在重试阶段输出误导性"失败"日志，只在最终失败时报错
+                if smoke_ok:
+                    logger.info("[verify] 冒烟测试通过，同步验证需要重试")
+                else:
+                    logger.info("[verify] 冒烟测试需要重试")
                 await self._cleanup()
                 self._cluster_running = False
 
