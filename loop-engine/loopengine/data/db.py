@@ -37,7 +37,7 @@ def _exec_to_row(exec: LoopExecution) -> dict[str, Any]:
         "started_at": exec.started_at.isoformat() if exec.started_at else None,
         "finished_at": exec.finished_at.isoformat() if exec.finished_at else None,
         "status": exec.status.value,
-        "domains": json.dumps(exec.domains, ensure_ascii=False),
+        "domains": json.dumps(exec.domains, ensure_ascii=False, default=str),
         "total_cost_cny": exec.total_cost_cny,
         "report_path": exec.report_path,
     }

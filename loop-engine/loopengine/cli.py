@@ -21,6 +21,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -252,7 +253,7 @@ async def _run_full_loop_async(
             domain_results.append((domain_name, result))
             execution.domains.append({
                 "name": domain_name,
-                "status": result.status,
+                "status": result.status.value if hasattr(result.status, "value") else str(result.status),
                 "duration_sec": round(result.duration_sec, 3),
                 "retry_count": result.retry_count,
                 "error": result.error,
@@ -284,7 +285,7 @@ async def _run_full_loop_async(
             domain_results.append(("client_ui", result))
             execution.domains.append({
                 "name": "client_ui",
-                "status": result.status,
+                "status": result.status.value if hasattr(result.status, "value") else str(result.status),
                 "duration_sec": round(result.duration_sec, 3),
                 "retry_count": result.retry_count,
                 "error": result.error,
@@ -650,6 +651,146 @@ def _cmd_report(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cmd_ci(args: argparse.Namespace) -> None:
+    """ci 子命令：查询/监控 GitHub Actions CI 状态，支持自动合入 PR。
+
+    子命令:
+        loopengine ci                     查最新 CI 状态
+        loopengine ci --pr 10             查指定 PR 的 CI
+        loopengine ci --branch master     查指定分支
+        loopengine ci --watch --pr 10     持续监控直到完成
+        loopengine ci --merge 10          等 CI 通过后自动合入 PR
+    """
+    import urllib.request
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        print("错误: 请设置 GITHUB_TOKEN 环境变量", file=sys.stderr)
+        sys.exit(1)
+
+    repo = "Fandel-Chuang/chaos-engine"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+    }
+
+    def _api_get(url: str) -> dict:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+
+    def _api_put(url: str, data: dict) -> dict:
+        req = urllib.request.Request(
+            url, data=json.dumps(data).encode(), method="PUT",
+            headers={**headers, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+
+    def _get_runs(branch: str | None = None) -> list[dict]:
+        url = f"https://api.github.com/repos/{repo}/actions/runs?per_page=5"
+        if branch:
+            url += f"&branch={branch}"
+        return _api_get(url).get("workflow_runs", [])
+
+    def _get_jobs(run_id: int) -> list[dict]:
+        url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/jobs"
+        return _api_get(url).get("jobs", [])
+
+    def _format(run: dict, jobs: list[dict] | None = None) -> str:
+        status = run.get("status", "?")
+        conclusion = run.get("conclusion", "?")
+        br = run.get("head_branch", "?")
+        created = run.get("created_at", "?")
+        html_url = run.get("html_url", "")
+        emoji = {"success": "✅", "failure": "❌", "cancelled": "⚠️"}.get(conclusion, "🔄")
+        lines = [f"{emoji} [{br}] {status}/{conclusion}  ({created})"]
+        lines.append(f"   {html_url}")
+        if jobs:
+            for job in jobs:
+                jc = job.get("conclusion") or job.get("status", "?")
+                jn = job.get("name", "?")
+                j_e = {"success": "✅", "failure": "❌", "cancelled": "⚠️", "skipped": "⏭️"}.get(jc, "🔄")
+                lines.append(f"   {j_e} {jn}")
+        return "\n".join(lines)
+
+    def _resolve_branch(pr_num: int | None, branch: str | None) -> str | None:
+        if pr_num:
+            pr = _api_get(f"https://api.github.com/repos/{repo}/pulls/{pr_num}")
+            return pr.get("head", {}).get("ref", "")
+        return branch
+
+    def _check(branch: str | None = None, pr_num: int | None = None) -> dict:
+        br = _resolve_branch(pr_num, branch)
+        runs = _get_runs(branch=br)
+        if not runs:
+            print(f"未找到 CI run" + (f" (branch={br})" if br else ""))
+            return {}
+        run = runs[0]
+        jobs = _get_jobs(run["id"])
+        print(_format(run, jobs))
+        return {"run": run, "jobs": jobs}
+
+    def _watch(branch: str | None = None, pr_num: int | None = None,
+               interval: int = 15, timeout_s: int = 600) -> bool:
+        br = _resolve_branch(pr_num, branch)
+        start = time.time()
+        attempt = 0
+        while time.time() - start < timeout_s:
+            attempt += 1
+            runs = _get_runs(branch=br)
+            if not runs:
+                print(f"[{attempt}] 等待 CI 触发...")
+                time.sleep(interval)
+                continue
+            run = runs[0]
+            status = run.get("status", "?")
+            if status == "completed":
+                jobs = _get_jobs(run["id"])
+                conclusion = run.get("conclusion", "?")
+                print(_format(run, jobs))
+                all_ok = conclusion == "success"
+                for job in jobs:
+                    if job.get("conclusion", "") in ("failure", "cancelled"):
+                        all_ok = False
+                return all_ok
+            else:
+                print(f"[{attempt}] {status}...")
+                time.sleep(interval)
+        print("⏰ 超时")
+        return False
+
+    def _merge_pr(pr_num: int) -> bool:
+        url = f"https://api.github.com/repos/{repo}/pulls/{pr_num}/merge"
+        try:
+            result = _api_put(url, {
+                "commit_title": f"Merge PR #{pr_num}",
+                "merge_method": "squash",
+            })
+            print(f"✅ PR #{pr_num} 已合入: {result.get('message', '?')}")
+            print(f"   SHA: {result.get('sha', '?')}")
+            return True
+        except Exception as e:
+            print(f"❌ 合入失败: {e}")
+            return False
+
+    if args.merge:
+        pr_num = args.merge
+        print(f"监控 PR #{pr_num} 的 CI 状态，通过后自动合入...")
+        ok = _watch(pr_num=pr_num, interval=args.interval, timeout_s=args.timeout)
+        if ok:
+            _merge_pr(pr_num)
+        else:
+            print("CI 未通过，不合入")
+            sys.exit(1)
+    elif args.watch:
+        ok = _watch(branch=args.branch, pr_num=args.pr,
+                    interval=args.interval, timeout_s=args.timeout)
+        sys.exit(0 if ok else 1)
+    else:
+        _check(branch=args.branch, pr_num=args.pr)
+
+
 # ── 参数解析 ──
 
 
@@ -725,6 +866,16 @@ def _build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--output", default=None, help="输出文件路径 (不指定则打印到 stdout)")
     report_parser.add_argument("--loop-id", default=None, help="指定 loop_id (不指定则用最近一条)")
     report_parser.set_defaults(func=_cmd_report)
+
+    # ── ci ──
+    ci_parser = subparsers.add_parser("ci", help="查询/监控 GitHub CI，支持自动合入 PR")
+    ci_parser.add_argument("--pr", type=int, default=None, help="指定 PR 编号")
+    ci_parser.add_argument("--branch", type=str, default=None, help="指定分支名")
+    ci_parser.add_argument("--watch", action="store_true", help="持续轮询直到 CI 完成")
+    ci_parser.add_argument("--merge", type=int, default=None, help="等 CI 通过后自动合入 PR #N")
+    ci_parser.add_argument("--interval", type=int, default=15, help="轮询间隔秒数 (默认: 15)")
+    ci_parser.add_argument("--timeout", type=int, default=600, help="轮询超时秒数 (默认: 600)")
+    ci_parser.set_defaults(func=_cmd_ci)
 
     return parser
 

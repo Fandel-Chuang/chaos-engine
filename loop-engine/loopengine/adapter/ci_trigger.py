@@ -516,10 +516,10 @@ class CITrigger:
 
         # 如果有 job 级别信息，使用 job 级别；否则用整体 CI 状态
         if job_status_map:
-            bt_status = _find_job_status(job_status_map, "build-and-test", "build_test")
-            lint_status = _find_job_status(job_status_map, "lua-lint", "lua_lint")
+            bt_status = _find_job_status(job_status_map, "build-and-test", "build_test", "编译", "debug")
+            lint_status = _find_job_status(job_status_map, "lua-lint", "lua_lint", "lua", "语法")
             vg_status = _find_job_status(
-                job_status_map, "memcheck", "valgrind", "memcheck"
+                job_status_map, "memcheck", "valgrind", "内存", "valgrind"
             )
             smoke_status = bt_status  # 冒烟在 build-and-test 内
         else:
