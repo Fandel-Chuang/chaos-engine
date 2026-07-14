@@ -9,9 +9,9 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="${PROJECT_DIR}/build"
 BIN_DIR="${BUILD_DIR}/bin"
 
-GATEWAY_TCP="127.0.0.1:9000"
+GATEWAY_TCP="127.0.0.1 9000"
 GATEWAY_WS="127.0.0.1:9002"
-ADMIN_URL="http://127.0.0.1:8080"
+ADMIN_URL="http://127.0.0.1:9090"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -43,13 +43,10 @@ echo ""
 echo -e "${BLUE}[1] TCP 二进制协议测试${NC}"
 
 # 构造二进制消息: [4B total_len=10][2B type=0x0010 LOGIN][4B payload=0x00000001]
-# total_len = 4(len) + 2(type) + 4(payload) = 10
-MSG=$(printf '\x00\x00\x00\x0A\x00\x10\x00\x00\x00\x01')
-
-# 发送并等待响应 (timeout 2s)
-RESP=$(echo -n "$MSG" | timeout 2 nc "$GATEWAY_TCP" 2>/dev/null || echo "")
-if [ -n "$RESP" ]; then
-    echo -e "  ${GREEN}✅${NC} TCP 连接成功，收到 $(echo -n "$RESP" | wc -c) 字节响应"
+# 用 printf 直接管道到 nc，避免 bash 命令替换丢 null 字节
+RESP_HEX=$(printf '\x00\x00\x00\x0A\x00\x10\x00\x00\x00\x01' | timeout 2 nc -w1 ${GATEWAY_TCP} 2>/dev/null | xxd -p 2>/dev/null || echo "")
+if [ -n "$RESP_HEX" ]; then
+    echo -e "  ${GREEN}✅${NC} TCP 连接成功，收到 $((${#RESP_HEX} / 2)) 字节响应 (hex: ${RESP_HEX})"
     PASS=$((PASS + 1))
 else
     echo -e "  ${YELLOW}⚠️${NC}  TCP 无响应（Gateway 可能未启动）"
@@ -78,7 +75,7 @@ fi
 echo ""
 echo -e "${BLUE}[3] Admin API 测试${NC}"
 
-check "Admin /health" curl -sf "${ADMIN_URL}/health" > /dev/null
+# Admin 只有 /api/stats 和 /api/aoi，没有 /health
 check "Admin /api/stats" curl -sf "${ADMIN_URL}/api/stats" > /dev/null
 check "Admin /api/aoi"   curl -sf "${ADMIN_URL}/api/aoi" > /dev/null
 
@@ -86,19 +83,12 @@ check "Admin /api/aoi"   curl -sf "${ADMIN_URL}/api/aoi" > /dev/null
 echo ""
 echo -e "${BLUE}[4] 二进制协议消息类型测试${NC}"
 
-send_msg() {
-    local type_hex="$1"
-    local payload_hex="$2"
-    local payload_len=$((${#payload_hex} / 2))
-    local total_len=$((4 + 2 + payload_len))
-    local total_hex=$(printf '%08X' "$total_len" | sed 's/../\\x&/g')
-    local type_bytes=$(echo "$type_hex" | sed 's/../\\x&/g')
-    local payload_bytes=$(echo "$payload_hex" | sed 's/../\\x&/g')
-    echo -n -e "${total_bytes}${type_bytes}${payload_bytes}"
-}
+# PING (0x0001): [4B total_len=6][2B type=0x0001]
+# 用 printf 直接管道，避免 send_msg() 函数的变量名 bug
+check "PING 消息" bash -c "printf '\x00\x00\x00\x06\x00\x01' | timeout 2 nc -w1 ${GATEWAY_TCP} | xxd -p | head -c 12 | grep -q '000000060002'"
 
-# PING (0x0001)
-check "PING 消息" timeout 2 bash -c "echo -n -e '\x00\x00\x00\x06\x00\x01' | nc -w1 ${GATEWAY_TCP} > /dev/null"
+# LOGIN (0x0010): [4B total_len=10][2B type=0x0010][4B payload=0x00000001]
+check "LOGIN 消息" bash -c "printf '\x00\x00\x00\x0A\x00\x10\x00\x00\x00\x01' | timeout 2 nc -w1 ${GATEWAY_TCP} >/dev/null 2>&1"
 
 # ── 5. 压力测试 (可选) ──
 if [ "${1:-}" = "--stress" ]; then
