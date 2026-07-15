@@ -421,13 +421,14 @@ set_target_properties(chaos_router PROPERTIES LINKER_LANGUAGE C)
 add_executable(chaos_gateway
     runtime/ce_gateway_main.c
     gateway/ce_gateway.c
+    gateway/ce_gateway_worker.c
 )
 target_include_directories(chaos_gateway PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/gateway
     ${LUA_HEADERS_DIR}
 )
-target_link_libraries(chaos_gateway PRIVATE engine_core)
+target_link_libraries(chaos_gateway PRIVATE engine_core engine_codec pthread)
 set_target_properties(chaos_gateway PROPERTIES LINKER_LANGUAGE C)
 
 # 传递 io_uring 宏给 chaos_gateway (ce_gateway.c 需要)
