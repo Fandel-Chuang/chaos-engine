@@ -43,6 +43,7 @@ typedef struct CeGameClientAddr {
     int    fd;              /* 客户端 socket fd */
     char   host[64];        /* 客户端 IP 字符串 */
     uint16_t port;          /* 客户端端口 */
+    CeBool via_gateway;     /* 是否通过 Gateway 转发（非直连） */
 } CeGameClientAddr;
 
 /* ---- 游戏实体 ---- */
