@@ -39,16 +39,57 @@ typedef struct CeSystemInfo {
     CeBool      enabled;
 } CeSystemInfo;
 
+/* ---- ECS World（实例化上下文）---- */
+
+typedef struct CeEcsWorld {
+    CeAllocator* allocator;
+    CeBool       initialized;
+
+    /* 实体 */
+    uint32_t     entity_count;
+    uint32_t     entity_capacity;
+    CeEntity*    entity_generations;   /* 第 i 个槽位的 generation */
+    CeArchetype** entity_archetypes;   /* 第 i 个实体所在的 Archetype */
+    uint32_t*    entity_rows;          /* 第 i 个实体在 Archetype 中的行 */
+    uint32_t     free_entity_count;
+    uint32_t*    free_entities;        /* 空闲实体索引栈 */
+
+    /* 组件 */
+    uint32_t     component_count;
+    CeComponentInfo components[CE_MAX_COMPONENTS];
+
+    /* Archetype — 动态扩容 */
+    uint32_t     archetype_count;
+    uint32_t     archetype_capacity;
+    CeArchetype** archetypes;
+
+    /* 系统 — 动态扩容 */
+    uint32_t     system_count;
+    uint32_t     system_capacity;
+    CeSystemInfo* systems;
+
+    /* 复制管理器上下文 (外部注入) */
+    struct CeReplContext* repl_ctx;
+} CeEcsWorld;
+
 /* ---- 内部 API ---- */
 
-/* 前向声明 (避免循环依赖) */
-typedef struct CeReplContext CeReplContext;
-
-/** 设置复制管理器上下文 (用于自动脏标) */
+/** 设置复制管理器上下文 (用于自动脏标) - 操作默认 world */
 void ce_ecs_set_replication_context(CeReplContext* ctx);
+
+/** [World] 设置复制管理器上下文 */
+void ce_ecs_set_replication_context_world(CeEcsWorld* world, CeReplContext* ctx);
 
 CeResult ce_ecs_init(CeAllocator* allocator);
 void     ce_ecs_shutdown(void);
 void     ce_ecs_update_systems(float delta_time);
+
+/* ---- World 实例化 API ---- */
+
+CeEcsWorld* ce_ecs_world_create(void);
+void        ce_ecs_world_destroy(CeEcsWorld* world);
+
+/* 获取默认 world (若不存在则自动创建) */
+CeEcsWorld* ce_ecs_get_default_world(void);
 
 #endif /* CE_ECS_INTERNAL_H */
