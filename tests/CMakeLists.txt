@@ -342,6 +342,16 @@ target_link_libraries(test_rpc PRIVATE engine_rpc engine_core pthread)
 set_target_properties(test_rpc PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME rpc COMMAND test_rpc)
 
+# ---- test_codec (统一编解码接口) ----
+add_executable(test_codec unit/test_codec.c)
+target_include_directories(test_codec PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_codec PRIVATE engine_codec engine_core)
+set_target_properties(test_codec PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME codec COMMAND test_codec)
+
 # ============================================================
 # 性能基准测试 (Phase 2.5/2.6)
 # ============================================================
