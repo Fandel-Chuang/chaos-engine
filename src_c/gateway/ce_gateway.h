@@ -17,6 +17,7 @@
 #include "public_api/ce_types.h"
 #include "network/ce_async_io.h"
 #include "network/ce_kcp.h"
+#include "codec/ce_codec.h"
 
 #include <stdint.h>
 #include <netinet/in.h>
@@ -116,6 +117,9 @@ typedef struct CeGatewayConn {
     uint8_t*             send_buf;      /* 发送缓冲区 (CE_GW_SEND_BUF_SIZE) */
     int                  send_len;      /* 待发送数据长度 */
     CeBool               recv_pending;  /* 是否已有 recv 在飞行 */
+    /* ---- 编解码 ---- */
+    struct CeCodecCtx*   codec;         /* 编解码上下文 (NULL=未协商，明文透传) */
+    CeBool               codec_negotiated; /* 是否已完成编解码协商 */
     /* ---- KCP 专属字段 ---- */
     int                  protocol;      /* 0=TCP, 1=KCP, 2=WebSocket */
     struct sockaddr_in   peer_addr;     /* KCP: 对端地址 (用于 sendto) */
@@ -175,6 +179,11 @@ typedef struct CeGateway {
     /* 动态超时参数 */
     int                  wait_timeout_ms;  /* 当前 wait 超时 (动态调整) */
     CeBool               last_wait_timed_out; /* 上次 wait 是否超时 */
+
+    /* ---- 多线程编解码 ---- */
+    struct CeWorkerPool* worker_pool;      /* 工作线程池 (NULL=禁用，主线程同步编解码) */
+    CeCodecConfig        default_codec;    /* 默认编解码配置 (不协商时使用) */
+    CeBool               codec_enabled;    /* 是否启用编解码 */
 } CeGateway;
 
 /* ================================================================
@@ -188,6 +197,10 @@ typedef struct CeGatewayConfig {
     int          heartbeat_timeout_ms;     /* 心跳超时 */
     int          kcp_enabled;              /* 是否启用 KCP (1=启用, 0=禁用) */
     int          ws_enabled;               /* 是否启用 WebSocket (1=启用, 0=禁用) */
+    int          codec_enabled;            /* 是否启用编解码 (1=启用, 0=禁用) */
+    int          worker_threads;           /* 工作线程数 (0=CPU核心数, <0=禁用线程池) */
+    CeCompressType  default_compress;      /* 默认压缩算法 (不协商时) */
+    CeEncryptType   default_encrypt;       /* 默认加密算法 (不协商时) */
 } CeGatewayConfig;
 
 /* ================================================================
