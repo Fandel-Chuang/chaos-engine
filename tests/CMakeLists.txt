@@ -322,6 +322,16 @@ target_link_libraries(test_game_session PRIVATE engine_core engine_server)
 set_target_properties(test_game_session PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME game_session COMMAND test_game_session)
 
+# ---- test_rpc (Phase 1.7: 协程RPC + 服务治理) ----
+add_executable(test_rpc unit/test_rpc.c)
+target_include_directories(test_rpc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_rpc PRIVATE engine_rpc engine_core pthread)
+set_target_properties(test_rpc PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME rpc COMMAND test_rpc)
+
 # ============================================================
 # 性能基准测试 (Phase 2.5/2.6)
 # ============================================================
