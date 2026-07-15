@@ -22,6 +22,9 @@ DBPROXY_SYNC=9001
 DBPROXY_DB=9003
 ADMIN_PORT=9090
 
+# Gateway 认证 token（Game Server 只接受持有此 token 的 Gateway 连接）
+GATEWAY_TOKEN="chaos-gateway-secret"
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
 mkdir -p "$LOG_DIR" "$PID_DIR"
@@ -81,7 +84,7 @@ fi
 # ── 2. Game Server (C 进程，带 admin socket) ──
 if [ $START_GAME -eq 1 ]; then
     rm -f /tmp/chaos_admin.sock
-    start_proc "game" "${BIN_DIR}/chaos_server" "--admin"
+    start_proc "game" "${BIN_DIR}/chaos_server" "--admin --gateway-token ${GATEWAY_TOKEN}"
 fi
 
 # ── 3. Router (C 进程，加载 Lua 业务脚本) ──
@@ -139,7 +142,7 @@ print_status() {
 }
 
 print_status "dbproxy"  "sync :${DBPROXY_SYNC}  db :${DBPROXY_DB}"
-print_status "game"     "port :${GAME_PORT}  admin /tmp/chaos_admin.sock"
+print_status "game"     "internal 127.0.0.1:${GAME_PORT} (gateway-only)  admin /tmp/chaos_admin.sock"
 print_status "router"   "game :${ROUTER_GAME}  cluster :${ROUTER_CLUSTER}"
 print_status "gateway"  "tcp :${GATEWAY_TCP}  kcp :${GATEWAY_KCP}  ws :${GATEWAY_WS}"
 print_status "admin"    "http://localhost:${ADMIN_PORT}"
@@ -148,9 +151,11 @@ echo ""
 echo "============================================"
 echo " 连接方式"
 echo "============================================"
-echo "  Game TCP:  telnet 127.0.0.1 ${GAME_PORT}"
 echo "  Gateway:   telnet 127.0.0.1 ${GATEWAY_TCP}"
 echo "  Admin:     http://localhost:${ADMIN_PORT}"
+echo ""
+echo "  [注意] Game Server 仅监听 127.0.0.1:${GAME_PORT}"
+echo "  不接受外部直连，客户端请通过 Gateway 接入"
 echo ""
 echo " 停止:      ./scripts/stop_cluster_server.sh"
 echo " 日志:      tail -f logs/*.log"
