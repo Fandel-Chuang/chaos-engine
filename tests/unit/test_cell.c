@@ -3,6 +3,7 @@
  */
 
 #include "server/ce_cell.h"
+#include "server/ce_cell_manager.h"
 #include "server/ce_aoi.h"
 #include "public_api/ce_types.h"
 
@@ -163,6 +164,53 @@ static void test_query_nearby(void) {
     printf("PASS\n");
 }
 
+static void test_multi_instance(void) {
+    printf("  test_multi_instance... ");
+
+    /* 创建两个独立的管理器实例（不同于默认全局实例） */
+    CeCellManager* mgr_a = ce_cell_mgr_create(500.0f, 500.0f, 100.0f, 100.0f, 150, 20);
+    CeCellManager* mgr_b = ce_cell_mgr_create(800.0f, 800.0f, 200.0f, 200.0f, 100, 10);
+
+    assert(mgr_a != NULL);
+    assert(mgr_b != NULL);
+    assert(mgr_a != mgr_b);
+
+    /* mgr_a: 500/100 = 5x5 = 25 cells */
+    assert(ce_cell_mgr_count(mgr_a) == 25);
+
+    /* mgr_b: 800/200 = 4x4 = 16 cells */
+    assert(ce_cell_mgr_count(mgr_b) == 16);
+
+    /* 各自查找位置 */
+    CeCellId a_cell = ce_cell_mgr_find_by_position(mgr_a, 50.0f, 50.0f);
+    CeCellId b_cell = ce_cell_mgr_find_by_position(mgr_b, 50.0f, 50.0f);
+    assert(a_cell != CE_INVALID_CELL_ID);
+    assert(b_cell != CE_INVALID_CELL_ID);
+
+    /* 两个实例的 Cell ID 从各自 0 开始，可以相同 */
+    /* 验证各自能获取 Cell */
+    const CeCell* ca = ce_cell_mgr_get(mgr_a, a_cell);
+    const CeCell* cb = ce_cell_mgr_get(mgr_b, b_cell);
+    assert(ca != NULL);
+    assert(cb != NULL);
+    assert(ca->state == CE_CELL_ACTIVE);
+    assert(cb->state == CE_CELL_ACTIVE);
+
+    /* 进程分配独立 */
+    ce_cell_mgr_assign_process(mgr_a, a_cell, 100);
+    ce_cell_mgr_assign_process(mgr_b, b_cell, 200);
+    assert(ce_cell_mgr_get_process(mgr_a, a_cell) == 100);
+    assert(ce_cell_mgr_get_process(mgr_b, b_cell) == 200);
+
+    /* 销毁不影响另一个 */
+    ce_cell_mgr_destroy(mgr_a);
+    assert(ce_cell_mgr_count(mgr_b) == 16);  /* mgr_b 仍然有效 */
+
+    ce_cell_mgr_destroy(mgr_b);
+
+    printf("PASS\n");
+}
+
 int main(void) {
     printf("=== Cell Manager Tests ===\n");
 
@@ -175,6 +223,7 @@ int main(void) {
     test_merge();
     test_process_assignment();
     test_query_nearby();
+    test_multi_instance();
 
     printf("\nAll Cell tests passed!\n");
     return 0;
