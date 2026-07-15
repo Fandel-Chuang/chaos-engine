@@ -134,16 +134,27 @@ CeResult ce_repl_rpc_send(CeReplContext* ctx, uint64_t entity_id,
     }
 
     /* 加入 pending 队列 (用于可靠 RPC 的 ack/timeout 跟踪) */
-    if (reliability == CE_RPC_RELIABLE &&
-        ctx->rpc_pending_count < CE_RPC_MAX_PENDING) {
-        uint32_t idx = ctx->rpc_pending_count++;
-        ctx->rpc_pending[idx].call_id = call_id;
-        ctx->rpc_pending[idx].entity_id = entity_id;
-        ctx->rpc_pending[idx].target = target;
-        ctx->rpc_pending[idx].reliability = reliability;
-        ctx->rpc_pending[idx].payload_len = total_len;
-        memcpy(ctx->rpc_pending[idx].payload, payload, total_len);
-        ctx->rpc_pending[idx].timeout = 1.0f; /* 1 second timeout */
+    if (reliability == CE_RPC_RELIABLE) {
+        if (!ce_repl_ensure_rpc_pending_capacity(ctx, ctx->rpc_pending_count + 1)) {
+            CE_LOG_ERROR("RPC", "rpc_pending queue full and expand failed (count=%u)",
+                         ctx->rpc_pending_count);
+            /* 非致命: RPC 仍会发送, 只是无法跟踪 ack/timeout */
+        } else {
+            uint32_t idx = ctx->rpc_pending_count++;
+            ctx->rpc_pending[idx].call_id = call_id;
+            ctx->rpc_pending[idx].entity_id = entity_id;
+            ctx->rpc_pending[idx].target = target;
+            ctx->rpc_pending[idx].reliability = reliability;
+            ctx->rpc_pending[idx].payload_len = total_len;
+            /* 动态分配 payload 副本 */
+            ctx->rpc_pending[idx].payload = (uint8_t*)malloc(total_len);
+            if (ctx->rpc_pending[idx].payload) {
+                memcpy(ctx->rpc_pending[idx].payload, payload, total_len);
+            } else {
+                ctx->rpc_pending[idx].payload_len = 0;
+            }
+            ctx->rpc_pending[idx].timeout = 1.0f; /* 1 second timeout */
+        }
     }
 
     CE_LOG_INFO("RPC", "send method='%s' entity=%llu target=%d reliable=%d "
@@ -285,15 +296,18 @@ void ce_repl_rpc_tick(CeReplContext* ctx, float dt) {
     for (uint32_t i = 0; i < ctx->rpc_pending_count; i++) {
         ctx->rpc_pending[i].timeout -= dt;
         if (ctx->rpc_pending[i].timeout <= 0.0f) {
-            /* 超时: 在 MVP 中丢弃，后续 Phase 实现重传 */
+            /* 超时: 释放 payload, 在 MVP 中丢弃，后续 Phase 实现重传 */
             CE_LOG_WARN("RPC", "pending RPC call_id=%u timed out",
                         ctx->rpc_pending[i].call_id);
+            free(ctx->rpc_pending[i].payload);
+            ctx->rpc_pending[i].payload = NULL;
             /* 不保留此项 (通过不复制到 write_idx 来丢弃) */
         } else {
             /* 保留 */
             if (write_idx != i) {
-                memcpy(&ctx->rpc_pending[write_idx], &ctx->rpc_pending[i],
-                       sizeof(ctx->rpc_pending[0]));
+                ctx->rpc_pending[write_idx] = ctx->rpc_pending[i];
+                /* 清空原位置以避免 double-free */
+                ctx->rpc_pending[i].payload = NULL;
             }
             write_idx++;
         }
