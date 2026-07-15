@@ -28,7 +28,7 @@ jobs:
             liblua5.4-dev liburing-dev libbpf-dev \
             clang llvm luarocks xvfb xauth \
             libvulkan-dev libx11-dev \
-            flatbuffers-compiler
+            flatbuffers-compiler libcurl4-openssl-dev
 
       - name: 安装 Lapis
         run: |
@@ -101,7 +101,7 @@ jobs:
             liblua5.4-dev liburing-dev libbpf-dev \
             clang llvm \
             libvulkan-dev libx11-dev \
-            flatbuffers-compiler
+            flatbuffers-compiler libcurl4-openssl-dev
 
       - name: Release 编译
         run: |
@@ -168,7 +168,7 @@ jobs:
             cmake build-essential \
             liblua5.4-dev liburing-dev libbpf-dev \
             libvulkan-dev libx11-dev \
-            flatbuffers-compiler
+            flatbuffers-compiler libcurl4-openssl-dev
 
       - name: 编译 Gateway
         run: |
@@ -205,7 +205,7 @@ jobs:
             liblua5.4-dev liburing-dev libbpf-dev \
             clang llvm \
             libvulkan-dev libx11-dev \
-            flatbuffers-compiler
+            flatbuffers-compiler libcurl4-openssl-dev
 
       - name: 编译 (Debug)
         run: |
