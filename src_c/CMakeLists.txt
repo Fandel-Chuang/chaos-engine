@@ -21,6 +21,13 @@ file(GLOB_RECURSE ENGINE_CORE_SOURCES
 list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*_kern\\.c$")
 list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*\\.bpf\\.c$")
 
+# 如果 Lua 不可用，排除依赖 Lua 的源文件
+if(NOT LUA_LIB_FILE)
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*_lua\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*script/.*\\.c$")
+    add_compile_definitions(CHAOS_NO_LUA=1)
+endif()
+
 # 收集 public_api 头文件（仅用于 IDE 索引，不参与编译）
 file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/public_api/*.h"
@@ -73,10 +80,17 @@ if(NOT LUA_HEADERS_OK OR NOT LUA_LIB_OK)
         if(LUA_SYS_HEADER)
             set(LUA_HEADERS_DIR "${LUA_SYS_HEADER}")
             set(LUA_LIB_FILE "lua5.4")
+        else()
+            # Lua 完全不可用 — 跳过，不阻塞编译
+            set(LUA_HEADERS_DIR "")
+            set(LUA_LIB_FILE "")
+            message(STATUS "Lua: NOT found, building without Lua support")
         endif()
     endif()
 endif()
-message(STATUS "Lua: headers=${LUA_HEADERS_DIR} lib=${LUA_LIB_FILE}")
+if(LUA_LIB_FILE)
+    message(STATUS "Lua: headers=${LUA_HEADERS_DIR} lib=${LUA_LIB_FILE}")
+endif()
 
 # 静态库目标
 add_library(engine_core STATIC ${ENGINE_CORE_SOURCES})
@@ -115,7 +129,10 @@ target_compile_options(engine_core PRIVATE
 if(WIN32)
     target_link_libraries(engine_core PRIVATE winmm)
 elseif(UNIX AND NOT APPLE)
-    target_link_libraries(engine_core PRIVATE m pthread dl ${LUA_LIB_FILE})
+    target_link_libraries(engine_core PRIVATE m pthread dl)
+    if(LUA_LIB_FILE)
+        target_link_libraries(engine_core PRIVATE ${LUA_LIB_FILE})
+    endif()
 
     if(LINUX)
         # eBPF: Linux 5.x+ 自动启用
@@ -452,3 +469,8 @@ add_subdirectory(save)
 # 微服务 RPC 模块 (协程RPC + 服务注册/发现 + 服务治理)
 # ============================================================
 add_subdirectory(rpc)
+
+# ============================================================
+# 编解码模块 (统一压缩/加密接口)
+# ============================================================
+add_subdirectory(codec)

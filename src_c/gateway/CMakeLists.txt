@@ -9,6 +9,7 @@
 # 暂不编译（死代码）。待后续统一接口后再启用。
 add_library(engine_gateway STATIC
     ce_gateway.c
+    ce_gateway_worker.c
 )
 
 target_include_directories(engine_gateway
@@ -18,7 +19,7 @@ target_include_directories(engine_gateway
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(engine_gateway PRIVATE engine_core)
+target_link_libraries(engine_gateway PRIVATE engine_core engine_codec pthread)
 
 # 传递 io_uring 宏和链接库给 engine_gateway
 if(CHAOS_USE_IO_URING AND LIBURING_FOUND)
