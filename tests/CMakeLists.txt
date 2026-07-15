@@ -322,6 +322,16 @@ target_link_libraries(test_game_session PRIVATE engine_core engine_server)
 set_target_properties(test_game_session PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME game_session COMMAND test_game_session)
 
+# ---- test_dbproxy_native (Phase 1.1: libmongoc 原生驱动) ----
+add_executable(test_dbproxy_native unit/test_dbproxy_native.c)
+target_include_directories(test_dbproxy_native PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_dbproxy_native PRIVATE engine_dbproxy engine_core)
+set_target_properties(test_dbproxy_native PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME dbproxy_native COMMAND test_dbproxy_native)
+
 # ============================================================
 # 性能基准测试 (Phase 2.5/2.6)
 # ============================================================
