@@ -16,6 +16,8 @@
 #define _DEFAULT_SOURCE
 
 #include "ce_gateway.h"
+#include "ce_gateway_worker.h"
+#include "codec/ce_codec.h"
 #include "public_api/ce_log.h"
 
 #include <stdlib.h>
@@ -476,6 +478,8 @@ static CeGatewayConn* conn_create(int fd, uint64_t conn_id) {
     conn->recv_offset = 0;
     conn->send_len = 0;
     conn->recv_pending = CE_FALSE;
+    conn->codec = NULL;
+    conn->codec_negotiated = CE_FALSE;
     conn->protocol = CE_GW_PROTO_TCP;  /* 默认 TCP */
     conn->kcp_ctx = NULL;
     conn->ws_state = 0;  /* 0=等待握手判断 */
@@ -490,6 +494,11 @@ static void conn_destroy(CeGatewayConn* conn) {
     if (conn->kcp_ctx) {
         ce_kcp_destroy(conn->kcp_ctx);
         conn->kcp_ctx = NULL;
+    }
+    /* 销毁编解码上下文 */
+    if (conn->codec) {
+        ce_codec_destroy(conn->codec);
+        conn->codec = NULL;
     }
     free(conn->recv_buf);
     free(conn->send_buf);
@@ -910,50 +919,88 @@ static void ws_send_frame(CeGateway* gw, CeGatewayConn* conn,
  * 消息处理
  * ================================================================ */
 
-/** 向客户端发送数据 (自动区分 TCP/KCP/WS)
- * 小包 (<=256B) 用同步 send，大包走 io_uring 异步 send */
-static void gw_send_to_conn(CeGateway* gw, CeGatewayConn* conn,
-                            const uint8_t* data, int len) {
-    /* 同步发送阈值：小包直接 send，避免 SQE/CQE 开销 */
-    const int SYNC_SEND_THRESHOLD = 256;
+/** 判断消息类型是否跳过编解码（首包协商 + 心跳） */
+static CeBool gw_msg_skip_codec(uint16_t msg_type) {
+    switch (msg_type) {
+    case CE_GW_MSG_PING:
+    case CE_GW_MSG_PONG:
+    case CE_GW_MSG_LOGIN:
+    case CE_GW_MSG_LOGIN_RESP:
+        return CE_TRUE;
+    default:
+        return CE_FALSE;
+    }
+}
 
+/** 向客户端发送原始数据（不走编解码，统一走 io_uring 异步 send）
+ *  用于 PING/PONG/LOGIN/LOGIN_RESP 等协议控制包 */
+static void gw_send_raw(CeGateway* gw, CeGatewayConn* conn,
+                        const uint8_t* data, int len) {
     if (conn->protocol == CE_GW_PROTO_KCP && conn->kcp_ctx) {
-        /* KCP 连接：通过 ce_kcp_send 发送可靠数据 */
         int ret = ce_kcp_send(conn->kcp_ctx, data, len);
         if (ret < 0) {
             CE_LOG_WARN("GATEWAY", "KCP send failed for conn=%llu",
                         (unsigned long long)conn->conn_id);
         }
-        /* 驱动 KCP 状态机以尽快发送 */
         uint32_t now_ms = (uint32_t)(gw_now_us() / 1000ULL);
         ce_kcp_update(conn->kcp_ctx, now_ms);
     } else if (conn->protocol == CE_GW_PROTO_WS && conn->ws_state == 1) {
-        /* WebSocket：封装成 WS 帧再发送 (二进制帧) */
         ws_send_frame(gw, conn, data, len, WS_OPCODE_BINARY);
     } else {
-        /* TCP 连接：小包同步 send，大包异步 io_uring */
-        if (len <= SYNC_SEND_THRESHOLD) {
-            /* 同步发送：内核 socket buffer 足够，不会阻塞 */
-            ssize_t sent = send(conn->fd, data, (size_t)len, MSG_NOSIGNAL);
-            if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                CE_LOG_WARN("GATEWAY", "Sync send failed for conn=%llu (errno=%d)",
-                            (unsigned long long)conn->conn_id, errno);
-                conn->state = CE_GW_CONN_CLOSING;
-            }
-        } else {
-            /* 大包走 io_uring 异步发送 */
-            ce_async_send(gw->io, conn->fd, data, len, conn);
-        }
+        /* TCP：统一走 io_uring 异步发送 */
+        ce_async_send(gw->io, conn->fd, data, len, conn);
     }
 }
 
-/** 向客户端发送 PONG 消息 (走 gw_send_to_conn，6B 小包自动同步 send) */
+/** 向客户端发送业务数据（走编解码: 压缩->加密，再统一异步 send）
+ *  用于 GAME_DATA 等业务包 */
+static void gw_send_encoded(CeGateway* gw, CeGatewayConn* conn,
+                            const uint8_t* data, int len) {
+    /* 未启用编解码或未协商，直接发送 */
+    if (!gw->codec_enabled || !conn->codec) {
+        gw_send_raw(gw, conn, data, len);
+        return;
+    }
+
+    /* 编码: 压缩 -> 加密 */
+    uint8_t  enc_buf[CE_GW_SEND_BUF_SIZE];
+    uint32_t enc_len = sizeof(enc_buf);
+    CeResult ret = ce_codec_encode(conn->codec, data, (uint32_t)len,
+                                     enc_buf, &enc_len);
+    if (ret != CE_OK) {
+        CE_LOG_WARN("GATEWAY", "Encode failed for conn=%llu, sending raw",
+                    (unsigned long long)conn->conn_id);
+        gw_send_raw(gw, conn, data, len);
+        return;
+    }
+
+    /* 编码后数据写入 send_buf 再异步发送 */
+    gw_send_raw(gw, conn, enc_buf, (int)enc_len);
+}
+
+/** 向客户端发送数据（统一入口，自动判断是否走编解码） */
+static void gw_send_to_conn(CeGateway* gw, CeGatewayConn* conn,
+                            const uint8_t* data, int len) {
+    if (len < CE_GW_HEADER_SIZE) return;
+
+    uint16_t msg_type = ce_gateway_read_u16(data + 4);
+
+    /* 首包协商 + 心跳：不走编解码，直接发送 */
+    if (gw_msg_skip_codec(msg_type)) {
+        gw_send_raw(gw, conn, data, len);
+    } else {
+        /* 业务数据：走编解码 */
+        gw_send_encoded(gw, conn, data, len);
+    }
+}
+
+/** 向客户端发送 PONG 消息 (协议控制包，不走编解码) */
 static void send_pong(CeGateway* gw, CeGatewayConn* conn) {
     /* 构造 PONG 消息帧: [4B total_len=6][2B msg_type=PONG] */
     uint8_t pong_buf[CE_GW_HEADER_SIZE];
     ce_gateway_write_u32(pong_buf, (uint32_t)CE_GW_HEADER_SIZE);
     ce_gateway_write_u16(pong_buf + 4, CE_GW_MSG_PONG);
-    gw_send_to_conn(gw, conn, pong_buf, CE_GW_HEADER_SIZE);
+    gw_send_raw(gw, conn, pong_buf, CE_GW_HEADER_SIZE);
 }
 
 /** 处理收到的完整消息 (解析协议帧 -> 路由) */
@@ -966,11 +1013,9 @@ static void handle_message(CeGateway* gw, CeGatewayConn* conn,
 
     if (total_len > (uint32_t)len) return; /* 不完整 */
 
-    /* payload 指针和长度（当前 switch 分支未直接使用，但保留供未来扩展） */
+    /* payload 指针和长度 */
     const uint8_t* payload = data + CE_GW_HEADER_SIZE;
     int payload_len = (int)total_len - CE_GW_HEADER_SIZE;
-    (void)payload;
-    (void)payload_len;
 
     switch (msg_type) {
     case CE_GW_MSG_PING:
@@ -991,22 +1036,86 @@ static void handle_message(CeGateway* gw, CeGatewayConn* conn,
         conn->state = CE_GW_CONN_CLOSING;
         break;
 
-    case CE_GW_MSG_GAME_DATA:
-    case CE_GW_MSG_LOGIN:
-        /* 转发到后端 (如果已连接) */
+    case CE_GW_MSG_GAME_DATA: {
+        /* 业务数据：先解码（解密->解压），再转发后端明文 */
+        const uint8_t* fwd_data = data;
+        int fwd_len = (int)total_len;
+
+        uint8_t dec_buf[CE_GW_RECV_BUF_SIZE];
+        if (gw->codec_enabled && conn->codec) {
+            /* 只解码 payload，头部保留原样 */
+            uint32_t dec_len = sizeof(dec_buf);
+            CeResult ret = ce_codec_decode(conn->codec,
+                                             data + CE_GW_HEADER_SIZE,
+                                             (uint32_t)total_len - CE_GW_HEADER_SIZE,
+                                             dec_buf, &dec_len);
+            if (ret == CE_OK) {
+                /* 重新组帧: [原始头][解码后payload] */
+                memcpy(conn->send_buf, data, CE_GW_HEADER_SIZE);
+                memcpy(conn->send_buf + CE_GW_HEADER_SIZE, dec_buf, dec_len);
+                /* 更新 total_len */
+                ce_gateway_write_u32(conn->send_buf, CE_GW_HEADER_SIZE + dec_len);
+                fwd_data = conn->send_buf;
+                fwd_len = CE_GW_HEADER_SIZE + (int)dec_len;
+            } else {
+                CE_LOG_WARN("GATEWAY", "Decode failed for conn=%llu, forwarding raw",
+                            (unsigned long long)conn->conn_id);
+            }
+        }
+
+        /* 转发到后端 */
+        if (gw->backend_count > 0 && gw->backends[0].connected) {
+            CeGatewayBackend* be = &gw->backends[0];
+            ce_async_send(gw->io, be->fd, fwd_data, fwd_len, conn);
+            CE_LOG_DEBUG("GATEWAY", "Forwarded GAME_DATA (%d bytes) to backend %s:%d",
+                         fwd_len, be->host, be->port);
+        } else {
+            CE_LOG_WARN("GATEWAY", "No backend available for GAME_DATA");
+        }
+        break;
+    }
+
+    case CE_GW_MSG_LOGIN: {
+        /* 首包协商: 解析客户端支持的算法，选定后创建 codec 上下文 */
+        if (gw->codec_enabled && !conn->codec_negotiated && payload_len >= 4) {
+            CeCodecConfig sel_config;
+            if (ce_codec_negotiate_select(payload, (uint32_t)payload_len,
+                                            &sel_config) == CE_OK) {
+                conn->codec = ce_codec_create(&sel_config);
+                conn->codec_negotiated = CE_TRUE;
+
+                /* 构造 LOGIN_RESP: 头部 + 协商响应 */
+                uint8_t  resp_buf[128];
+                uint32_t resp_payload_len = sizeof(resp_buf) - CE_GW_HEADER_SIZE;
+                ce_codec_negotiate_resp_encode(&sel_config,
+                                                 resp_buf + CE_GW_HEADER_SIZE,
+                                                 &resp_payload_len);
+                ce_gateway_write_u32(resp_buf, CE_GW_HEADER_SIZE + resp_payload_len);
+                ce_gateway_write_u16(resp_buf + 4, CE_GW_MSG_LOGIN_RESP);
+                gw_send_raw(gw, conn, resp_buf,
+                            CE_GW_HEADER_SIZE + (int)resp_payload_len);
+
+                CE_LOG_INFO("GATEWAY", "Codec negotiated for conn=%llu: compress=%s encrypt=%s",
+                            (unsigned long long)conn->conn_id,
+                            ce_codec_compress_name(sel_config.compress),
+                            ce_codec_encrypt_name(sel_config.encrypt));
+            }
+        }
+
+        /* LOGIN 也转发到后端 */
         if (gw->backend_count > 0 && gw->backends[0].connected) {
             CeGatewayBackend* be = &gw->backends[0];
             ce_async_send(gw->io, be->fd, data, (int)total_len, conn);
-            CE_LOG_DEBUG("GATEWAY", "Forwarded msg_type=0x%04X (%d bytes) to backend %s:%d",
-                         msg_type, (int)total_len, be->host, be->port);
+            CE_LOG_DEBUG("GATEWAY", "Forwarded LOGIN (%d bytes) to backend %s:%d",
+                         (int)total_len, be->host, be->port);
         } else {
-            CE_LOG_WARN("GATEWAY", "No backend available for msg_type=0x%04X", msg_type);
-            /* 发送错误响应: 使用 conn->send_buf 避免栈缓冲区悬空 */
+            /* 无后端时回 LOGIN_RESP 错误 */
             ce_gateway_write_u32(conn->send_buf, (uint32_t)CE_GW_HEADER_SIZE);
             ce_gateway_write_u16(conn->send_buf + 4, CE_GW_MSG_LOGIN_RESP);
-            gw_send_to_conn(gw, conn, conn->send_buf, CE_GW_HEADER_SIZE);
+            gw_send_raw(gw, conn, conn->send_buf, CE_GW_HEADER_SIZE);
         }
         break;
+    }
 
     default:
         CE_LOG_WARN("GATEWAY", "Unknown msg_type=0x%04X from conn=%llu, dropping",
@@ -1321,9 +1430,42 @@ CeGateway* ce_gateway_create(const CeGatewayConfig* config) {
         }
     }
 
-    CE_LOG_INFO("GATEWAY", "Gateway created: port=%d, max_conns=%d, kcp=%s, ws=%s, backend=%s, queue_depth=%d",
+    /* ---- 编解码初始化 ---- */
+    gw->codec_enabled = config ? config->codec_enabled : 0;  /* 默认不启用 */
+    gw->worker_pool = NULL;
+    memset(&gw->default_codec, 0, sizeof(gw->default_codec));
+    if (config) {
+        gw->default_codec.compress = config->default_compress;
+        gw->default_codec.encrypt = config->default_encrypt;
+    }
+
+    if (gw->codec_enabled) {
+        /* 生成默认密钥 */
+        gw->default_codec.key_len = 16;
+        srand((unsigned)time(NULL));
+        for (int i = 0; i < 16; i++) {
+            gw->default_codec.key[i] = (uint8_t)(rand() & 0xFF);
+        }
+
+        /* 创建工作线程池 */
+        int nthreads = config ? config->worker_threads : 0;
+        if (nthreads >= 0) {  /* 0=自动, <0=禁用(主线程同步) */
+            gw->worker_pool = ce_worker_pool_create(nthreads);
+            if (gw->worker_pool) {
+                CE_LOG_INFO("GATEWAY", "Worker pool: %d threads",
+                            ce_worker_pool_size(gw->worker_pool));
+            }
+        }
+
+        CE_LOG_INFO("GATEWAY", "Codec enabled: compress=%s, encrypt=%s",
+                    ce_codec_compress_name(gw->default_codec.compress),
+                    ce_codec_encrypt_name(gw->default_codec.encrypt));
+    }
+
+    CE_LOG_INFO("GATEWAY", "Gateway created: port=%d, max_conns=%d, kcp=%s, ws=%s, codec=%s, backend=%s, queue_depth=%d",
                 gw->port, gw->max_conns, gw->kcp_enabled ? "on" : "off",
                 gw->ws_enabled ? "on" : "off",
+                gw->codec_enabled ? "on" : "off",
                 ce_async_backend_name(), CE_GW_QUEUE_DEPTH);
 
     return gw;
@@ -1365,6 +1507,12 @@ void ce_gateway_destroy(CeGateway* gw) {
 
     /* 关闭异步 I/O */
     if (gw->io) ce_async_shutdown(gw->io);
+
+    /* 销毁工作线程池 */
+    if (gw->worker_pool) {
+        ce_worker_pool_destroy(gw->worker_pool);
+        gw->worker_pool = NULL;
+    }
 
     /* 关闭监听 socket */
     if (gw->listen_fd >= 0) close(gw->listen_fd);
