@@ -14,15 +14,22 @@ target_include_directories(engine_rpc PRIVATE
 target_link_libraries(engine_rpc PRIVATE engine_core pthread)
 
 # ---- 检测 libcurl (etcd 服务发现) ----
+include(CheckIncludeFile)
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(CURL QUIET libcurl)
 endif()
 if(NOT CURL_FOUND)
-    check_include_file_cxx(curl/curl.h HAVE_CURL_H)
+    check_include_file(curl/curl.h HAVE_CURL_H)
     if(HAVE_CURL_H)
-        set(CURL_LIBRARIES "curl")
         set(CURL_FOUND TRUE)
+        # 尝试找库
+        find_library(CURL_LIB NAMES curl)
+        if(CURL_LIB)
+            set(CURL_LIBRARIES "${CURL_LIB}")
+        else()
+            set(CURL_LIBRARIES "curl")
+        endif()
     endif()
 endif()
 
