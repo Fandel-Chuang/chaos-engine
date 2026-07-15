@@ -12,6 +12,7 @@
 #define _POSIX_C_SOURCE 200112L
 #include "public_api/chaos_engine.h"
 #include "network/ce_network.h"
+#include "network/ce_net_base.h"
 #include "network/ce_async_io.h"
 #include "server/ce_cell.h"
 #include "server/ce_aoi.h"
@@ -36,6 +37,10 @@
 
 #define DEFAULT_ADMIN_SOCK  "/tmp/chaos_admin.sock"
 
+/** Gateway 认证 token（可通过 --gateway-token 覆盖） */
+#define DEFAULT_GATEWAY_TOKEN  "chaos-gateway-secret"
+#define CE_GATEWAY_TOKEN_MAX   256
+
 static volatile int g_running = 1;
 
 static void signal_handler(int sig) {
@@ -48,6 +53,7 @@ typedef struct ClientCtx {
     int   fd;
     char  buf[BUFFER_SIZE];
     int   connected;
+    CeBool authed;         /* 是否已完成 Gateway 认证 */
     uint32_t entity_id;   /* 关联的游戏实体 ID (0 = 未加入) */
 } ClientCtx;
 
@@ -60,6 +66,64 @@ static int send_to_client(int fd, const uint8_t* data, int len) {
 }
 
 /**
+ * 处理 Gateway 认证
+ * 第一条消息必须是 CE_NET_MSG_LOGIN(0x0010)，载荷为 token 字符串
+ * 认证成功回复 CE_NET_MSG_LOGIN_RESP(0x0011)，载荷 result=CE_OK
+ */
+static CeBool handle_gateway_auth(ClientCtx* client,
+                                   const uint8_t* data, int len,
+                                   const char* expected_token) {
+    if (len < CE_GAME_HEADER_SIZE) return CE_FALSE;
+
+    uint16_t msg_type;
+    msg_type  = ((uint16_t)data[4]) << 8;
+    msg_type |=  (uint16_t)data[5];
+
+    if (msg_type != CE_NET_MSG_LOGIN) {
+        CE_LOG_WARN("GAME", "Gateway conn fd=%d: first msg must be LOGIN(0x0010), got 0x%04X",
+                    client->fd, msg_type);
+        return CE_FALSE;
+    }
+
+    int payload_len = len - CE_GAME_HEADER_SIZE;
+    if (payload_len <= 0 || payload_len >= CE_GATEWAY_TOKEN_MAX) {
+        CE_LOG_WARN("GAME", "Gateway conn fd=%d: invalid token length %d", client->fd, payload_len);
+        return CE_FALSE;
+    }
+
+    /* 提取 token */
+    char token[CE_GATEWAY_TOKEN_MAX];
+    memcpy(token, data + CE_GAME_HEADER_SIZE, payload_len);
+    token[payload_len] = '\0';
+
+    if (strcmp(token, expected_token) != 0) {
+        CE_LOG_WARN("GAME", "Gateway conn fd=%d: token mismatch", client->fd);
+        /* 回复认证失败 */
+        uint8_t resp[CE_GAME_HEADER_SIZE + 4];
+        resp[0] = 0; resp[1] = 0; resp[2] = 0; resp[3] = CE_GAME_HEADER_SIZE + 4;
+        resp[4] = (uint8_t)((CE_NET_MSG_LOGIN_RESP >> 8) & 0xFF);
+        resp[5] = (uint8_t)(CE_NET_MSG_LOGIN_RESP & 0xFF);
+        uint32_t fail = 1; /* 非 0 = 失败 */
+        memcpy(resp + CE_GAME_HEADER_SIZE, &fail, 4);
+        send_to_client(client->fd, resp, CE_GAME_HEADER_SIZE + 4);
+        return CE_FALSE;
+    }
+
+    /* 认证成功 */
+    uint8_t resp[CE_GAME_HEADER_SIZE + 4];
+    resp[0] = 0; resp[1] = 0; resp[2] = 0; resp[3] = CE_GAME_HEADER_SIZE + 4;
+    resp[4] = (uint8_t)((CE_NET_MSG_LOGIN_RESP >> 8) & 0xFF);
+    resp[5] = (uint8_t)(CE_NET_MSG_LOGIN_RESP & 0xFF);
+    uint32_t ok = 0; /* 0 = 成功 */
+    memcpy(resp + CE_GAME_HEADER_SIZE, &ok, 4);
+    send_to_client(client->fd, resp, CE_GAME_HEADER_SIZE + 4);
+
+    client->authed = CE_TRUE;
+    CE_LOG_INFO("GAME", "Gateway conn fd=%d: authed", client->fd);
+    return CE_TRUE;
+}
+
+/**
  * 处理 MSG_JOIN_REQUEST
  */
 static void handle_join_request(CeGameSession* session, ClientCtx* client,
@@ -67,8 +131,9 @@ static void handle_join_request(CeGameSession* session, ClientCtx* client,
     CeGameClientAddr addr;
     memset(&addr, 0, sizeof(addr));
     addr.fd = client->fd;
-    snprintf(addr.host, sizeof(addr.host), "client-%d", client->fd);
+    snprintf(addr.host, sizeof(addr.host), "gateway-%d", client->fd);
     addr.port = GAME_PORT;
+    addr.via_gateway = CE_TRUE;  /* 所有连接均通过 Gateway 转发 */
 
     uint32_t entity_id = 0;
     CeResult result = ce_game_session_join(session, &addr, &entity_id);
@@ -90,9 +155,9 @@ static void handle_join_request(CeGameSession* session, ClientCtx* client,
 
     if (result == CE_OK) {
         client->entity_id = entity_id;
-        CE_LOG_INFO("GAME", "Client fd=%d joined as entity %u", client->fd, entity_id);
+        CE_LOG_INFO("GAME", "Gateway conn fd=%d joined as entity %u", client->fd, entity_id);
     } else {
-        CE_LOG_WARN("GAME", "Client fd=%d join rejected (server full)", client->fd);
+        CE_LOG_WARN("GAME", "Gateway conn fd=%d join rejected (server full)", client->fd);
     }
 }
 
@@ -208,6 +273,7 @@ int main(int argc, char** argv) {
     int         save_interval = 300;
 
     /* 解析命令行参数 */
+    const char* gateway_token = DEFAULT_GATEWAY_TOKEN;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--admin") == 0) {
             admin_enabled = 1;
@@ -223,6 +289,8 @@ int main(int argc, char** argv) {
             backup_port = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--save-interval") == 0 && i + 1 < argc) {
             save_interval = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--gateway-token") == 0 && i + 1 < argc) {
+            gateway_token = argv[++i];
         }
     }
 
@@ -332,7 +400,7 @@ int main(int argc, char** argv) {
     /* 绑定地址 */
     CeNetAddress addr;
     memset(&addr, 0, sizeof(addr));
-    strncpy(addr.host, "0.0.0.0", sizeof(addr.host) - 1);
+    strncpy(addr.host, "127.0.0.1", sizeof(addr.host) - 1);  /* 仅内部访问，不暴露给外部 */
     addr.port = GAME_PORT;
 
     if (ce_socket_bind(listen_sock, &addr) != CE_OK) {
@@ -377,7 +445,8 @@ int main(int argc, char** argv) {
     printf("========================================\n");
     printf("  ChaosEngine Game Server v0.1.0\n");
     printf("  Backend: %s\n", ce_async_backend_name());
-    printf("  Listening on port %d\n", GAME_PORT);
+    printf("  Listening on 127.0.0.1:%d (Gateway-only)\n", GAME_PORT);
+    printf("  Gateway auth: enabled\n");
     printf("  AOI radius: %.1f\n", CE_GAME_DEFAULT_AOI_RADIUS);
     printf("  Spawn position: (%.0f, %.0f, %.0f)\n",
            CE_GAME_SPAWN_X, CE_GAME_SPAWN_Y, CE_GAME_SPAWN_Z);
@@ -424,14 +493,15 @@ int main(int argc, char** argv) {
                 if (slot >= 0) {
                     clients[slot].fd        = ev->client_fd;
                     clients[slot].connected = 1;
+                    clients[slot].authed    = CE_FALSE;  /* 待认证 */
                     clients[slot].entity_id = 0;
-                    printf("[+] Client connected (fd=%d, slot=%d)\n",
+                    printf("[+] Gateway conn (fd=%d, slot=%d)\n",
                            ev->client_fd, slot);
                     ce_async_recv(async, ev->client_fd,
                                   clients[slot].buf, BUFFER_SIZE,
                                   (void*)(intptr_t)slot);
                 } else {
-                    printf("[-] Client rejected (max %d clients)\n", MAX_CLIENTS);
+                    printf("[-] Gateway conn rejected (max %d)\n", MAX_CLIENTS);
                     close(ev->client_fd);
                 }
 
@@ -444,22 +514,36 @@ int main(int argc, char** argv) {
                 if (slot < 0 || slot >= MAX_CLIENTS || !clients[slot].connected) break;
 
                 if (ev->nbytes > 0) {
-                    /* 处理游戏协议消息 */
-                    handle_client_message(&game_session, &clients[slot],
-                                          (const uint8_t*)clients[slot].buf,
-                                          ev->nbytes, async);
+                    if (!clients[slot].authed) {
+                        /* 第一条消息必须认证 */
+                        if (!handle_gateway_auth(&clients[slot],
+                                                  (const uint8_t*)clients[slot].buf,
+                                                  ev->nbytes, gateway_token)) {
+                            /* 认证失败，关闭连接 */
+                            CE_LOG_WARN("GAME", "Gateway conn fd=%d: auth failed, closing", ev->fd);
+                            ce_async_close(async, ev->fd);
+                            clients[slot].connected = 0;
+                            break;
+                        }
+                    } else {
+                        /* 已认证，处理游戏协议消息 */
+                        handle_client_message(&game_session, &clients[slot],
+                                              (const uint8_t*)clients[slot].buf,
+                                              ev->nbytes, async);
+                    }
                     /* 继续接收 */
                     ce_async_recv(async, ev->fd,
                                   clients[slot].buf, BUFFER_SIZE,
                                   (void*)(intptr_t)slot);
                 } else {
-                    /* 客户端断开 */
-                    printf("[-] Client disconnected (fd=%d, slot=%d)\n", ev->fd, slot);
+                    /* Gateway 连接断开 */
+                    printf("[-] Gateway conn disconnected (fd=%d, slot=%d)\n", ev->fd, slot);
                     if (clients[slot].entity_id != 0) {
                         ce_game_session_leave(&game_session, clients[slot].entity_id);
                     }
                     ce_async_close(async, ev->fd);
                     clients[slot].connected = 0;
+                    clients[slot].authed    = CE_FALSE;
                     clients[slot].entity_id = 0;
                 }
                 break;
@@ -481,6 +565,7 @@ int main(int argc, char** argv) {
                     }
                     ce_async_close(async, ev->fd);
                     clients[slot].connected = 0;
+                    clients[slot].authed    = CE_FALSE;
                     clients[slot].entity_id = 0;
                 }
                 break;

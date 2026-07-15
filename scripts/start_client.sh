@@ -12,7 +12,6 @@ BIN_DIR="${BUILD_DIR}/bin"
 GATEWAY_HOST="${GATEWAY_HOST:-127.0.0.1}"
 GATEWAY_TCP_PORT="${GATEWAY_TCP_PORT:-9000}"
 GATEWAY_WS_PORT="${GATEWAY_WS_PORT:-9002}"
-GAME_PORT="${GAME_PORT:-7777}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -32,7 +31,6 @@ while [[ $# -gt 0 ]]; do
         --stress)   MODE="stress"; CONNS="${2:-100}"; shift 2 ;;
         --connect)  CONNECT="${2:-127.0.0.1:9000}"; shift 2 ;;
         --host)     GATEWAY_HOST="$2"; shift 2 ;;
-        --port)     GAME_PORT="$2"; shift 2 ;;
         *)          echo "未知参数: $1"; exit 1 ;;
     esac
 done
@@ -112,7 +110,7 @@ case "$MODE" in
         if timeout 1 bash -c "echo -n '' | nc -w1 ${GATEWAY_HOST} ${GATEWAY_TCP_PORT}" 2>/dev/null; then
             echo -e "${GREEN}✅ Gateway 在线${NC}"
         else
-            echo -e "${YELLOW}⚠️  Gateway 未响应，尝试直连 Game Server :${GAME_PORT}${NC}"
+            echo -e "${RED}❌ Gateway 未响应，请确认 Gateway 已启动${NC}"
         fi
         echo ""
         "${BIN_DIR}/chaos_net_client"

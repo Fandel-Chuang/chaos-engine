@@ -257,8 +257,8 @@ CeResult ce_game_session_join(CeGameSession* session,
         *out_entity_id = entity_id;
     }
 
-    CE_LOG_INFO("GAME", "Player joined: entity=%u, fd=%d, pos=(%.1f, %.1f, %.1f)",
-                entity_id, client_addr->fd,
+    CE_LOG_INFO("GAME", "Player joined: entity=%u, fd=%d, via_gateway=%d, pos=(%.1f, %.1f, %.1f)",
+                entity_id, client_addr->fd, client_addr->via_gateway,
                 CE_GAME_SPAWN_X, CE_GAME_SPAWN_Y, CE_GAME_SPAWN_Z);
 
     return CE_OK;

@@ -283,6 +283,73 @@ int main(void) {
     }
     PASS();
 
+    /* ---- multi_world (Phase 1.2 实例化测试) ---- */
+    TEST("multi_world_isolation");
+    {
+        /* 创建两个独立的 world */
+        CeEcsWorld* world_a = ce_ecs_world_create();
+        CeEcsWorld* world_b = ce_ecs_world_create();
+        CHECK(world_a != NULL);
+        CHECK(world_b != NULL);
+        CHECK(world_a != world_b);
+
+        /* 在 world_a 中注册组件 */
+        CeComponentId pos_a = ce_component_register_world(world_a, "Position", sizeof(Position), 4);
+        CHECK(pos_a != (CeComponentId)-1);
+
+        /* 在 world_b 中注册同名组件，ID 应各自独立 */
+        CeComponentId pos_b = ce_component_register_world(world_b, "Position", sizeof(Position), 4);
+        CHECK(pos_b != (CeComponentId)-1);
+        CHECK(pos_a == pos_b);  /* 两个 world 独立计数，ID 都从 0 开始 */
+
+        /* 在 world_a 创建实体并添加组件 */
+        CeEntity ea = ce_entity_create_world(world_a);
+        CHECK(ce_entity_is_alive_world(world_a, ea) == CE_TRUE);
+
+        Position* pa = (Position*)ce_entity_add_component_world(world_a, ea, pos_a);
+        CHECK(pa != NULL);
+        pa->x = 100.0f; pa->y = 200.0f; pa->z = 300.0f;
+
+        /* 在 world_b 创建实体并添加组件 */
+        CeEntity eb = ce_entity_create_world(world_b);
+        CHECK(ce_entity_is_alive_world(world_b, eb) == CE_TRUE);
+
+        Position* pb = (Position*)ce_entity_add_component_world(world_b, eb, pos_b);
+        CHECK(pb != NULL);
+        pb->x = 1.0f; pb->y = 2.0f; pb->z = 3.0f;
+
+        /* 验证隔离: world_a 的实体在 world_b 中不应存活 (index 相同但 generation 不同) */
+        /* 注意: 如果 index 相同且 generation 相同，is_alive 可能返回 true，
+           但这是合理的——隔离保证的是数据不串，而非实体 ID 唯一 */
+        CHECK(ce_ecs_get_entity_count_world(world_a) == 1);
+        CHECK(ce_ecs_get_entity_count_world(world_b) == 1);
+
+        /* 验证数据隔离: world_a 的 Position 值未被 world_b 影响 */
+        const Position* got_a = (const Position*)ce_entity_get_component_world(world_a, ea, pos_a);
+        CHECK(got_a != NULL);
+        CHECK(got_a->x == 100.0f && got_a->y == 200.0f && got_a->z == 300.0f);
+
+        const Position* got_b = (const Position*)ce_entity_get_component_world(world_b, eb, pos_b);
+        CHECK(got_b != NULL);
+        CHECK(got_b->x == 1.0f && got_b->y == 2.0f && got_b->z == 3.0f);
+
+        /* 销毁 world_a 中的实体，不影响 world_b */
+        ce_entity_destroy_world(world_a, ea);
+        CHECK(ce_entity_is_alive_world(world_a, ea) == CE_FALSE);
+        CHECK(ce_entity_is_alive_world(world_b, eb) == CE_TRUE);
+        CHECK(ce_ecs_get_entity_count_world(world_a) == 0);
+        CHECK(ce_ecs_get_entity_count_world(world_b) == 1);
+
+        /* 组件计数隔离 */
+        CHECK(ce_ecs_get_component_count_world(world_a) == 1);
+        CHECK(ce_ecs_get_component_count_world(world_b) == 1);
+
+        /* 清理 */
+        ce_ecs_world_destroy(world_a);
+        ce_ecs_world_destroy(world_b);
+    }
+    PASS();
+
     /* 清理 */
     ce_ecs_shutdown();
 
