@@ -69,6 +69,88 @@ void ce_aoi_debug_print(void);
  */
 void ce_aoi_set_replication_context(CeReplContext* ctx);
 
+/* ================================================================
+ * Grid AOI API (Phase 1.4)
+ *
+ * 可实例化的 Grid 空间索引，enter/move/leave O(1)，query O(k)。
+ * k = 覆盖的 cell 数量 × cell 内实体数。
+ * 与旧十字链表 API 完全独立，向后兼容。
+ * ================================================================ */
+
+/** Grid AOI 不透明句柄 */
+typedef struct CeAoiGrid CeAoiGrid;
+
+/**
+ * 创建 Grid AOI 实例。
+ *
+ * @param world_w   世界宽度
+ * @param world_h   世界高度
+ * @param cell_w    单个 cell 宽度（>0）
+ * @param cell_h    单个 cell 高度（>0）
+ * @param radius    默认查询半径（用于 query 时的回退值）
+ * @return 成功返回 CeAoiGrid*，失败返回 NULL
+ */
+CeAoiGrid* ce_aoi_grid_create(float world_w, float world_h,
+                               float cell_w, float cell_h, float radius);
+
+/** 销毁 Grid AOI 实例，释放所有资源 */
+void ce_aoi_grid_destroy(CeAoiGrid* grid);
+
+/**
+ * 实体进入 Grid AOI。O(1)
+ *
+ * @param grid       Grid 实例
+ * @param entity_id  实体 ID
+ * @param x          X 坐标
+ * @param y          Y 坐标
+ * @param z          Z 坐标（当前 2D 实现，z 被忽略）
+ * @return CE_OK 成功，CE_ERR 失败（未初始化/重复进入/越界）
+ */
+CeResult ce_aoi_grid_enter(CeAoiGrid* grid, uint32_t entity_id,
+                            float x, float y, float z);
+
+/**
+ * 实体移动。O(1)
+ * 自动从旧 cell 移除，加入新 cell。
+ *
+ * @param grid       Grid 实例
+ * @param entity_id  实体 ID
+ * @param x          新 X 坐标
+ * @param y          新 Y 坐标
+ * @param z          新 Z 坐标（当前 2D 实现，z 被忽略）
+ * @return CE_OK 成功，CE_ERR 失败（实体不存在/越界）
+ */
+CeResult ce_aoi_grid_move(CeAoiGrid* grid, uint32_t entity_id,
+                           float x, float y, float z);
+
+/**
+ * 实体离开 Grid AOI。O(1)
+ *
+ * @param grid       Grid 实例
+ * @param entity_id  实体 ID
+ * @return CE_OK 成功，CE_ERR 失败（实体不存在）
+ */
+CeResult ce_aoi_grid_leave(CeAoiGrid* grid, uint32_t entity_id);
+
+/**
+ * 查询给定位置和半径范围内的所有实体。O(k)
+ * k = 覆盖的 cell 数量 × cell 内实体数
+ *
+ * @param grid       Grid 实例
+ * @param x          查询中心 X
+ * @param y          查询中心 Y
+ * @param z          查询中心 Z（当前 2D 实现，z 被忽略）
+ * @param radius     查询半径
+ * @param out_ids    输出缓冲区，存储找到的实体 ID
+ * @param max_count  缓冲区最大容量
+ * @return 找到的实体数量（不超过 max_count）
+ */
+int ce_aoi_grid_query(CeAoiGrid* grid, float x, float y, float z,
+                       float radius, uint32_t* out_ids, int max_count);
+
+/** 获取 Grid AOI 中的实体总数 */
+int ce_aoi_grid_entity_count(CeAoiGrid* grid);
+
 #ifdef __cplusplus
 }
 #endif

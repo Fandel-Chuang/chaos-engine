@@ -5,6 +5,7 @@
 
 add_library(engine_server STATIC
     ce_aoi.c
+    ce_aoi_grid.c
     ce_cell.c
     ce_cell_manager.c
     ce_game_session.c
