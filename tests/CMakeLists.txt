@@ -198,8 +198,10 @@ target_compile_options(engine_core_posix_test PRIVATE
     $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration>
     $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -Wpedantic>
 )
-target_link_libraries(engine_core_posix_test PRIVATE m pthread dl
-    ${CMAKE_SOURCE_DIR}/third_party/lua/lib/liblua5.4.so)
+target_link_libraries(engine_core_posix_test PRIVATE m pthread dl)
+    if(LUA_LIB_FILE)
+        target_link_libraries(engine_core_posix_test PRIVATE ${LUA_LIB_FILE})
+    endif()
 # eBPF support (same as engine_core)
 find_package(PkgConfig QUIET)
 if(PKG_CONFIG_FOUND)
