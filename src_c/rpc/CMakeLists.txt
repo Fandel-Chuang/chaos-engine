@@ -13,6 +13,33 @@ target_include_directories(engine_rpc PRIVATE
 
 target_link_libraries(engine_rpc PRIVATE engine_core pthread)
 
+# ---- 检测 libcurl (etcd 服务发现) ----
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(CURL QUIET libcurl)
+endif()
+if(NOT CURL_FOUND)
+    check_include_file_cxx(curl/curl.h HAVE_CURL_H)
+    if(HAVE_CURL_H)
+        set(CURL_LIBRARIES "curl")
+        set(CURL_FOUND TRUE)
+    endif()
+endif()
+
+if(CURL_FOUND)
+    message(STATUS "RPC: libcurl found, enabling etcd service discovery")
+    target_compile_definitions(engine_rpc PRIVATE HAVE_CURL=1)
+    target_include_directories(engine_rpc PRIVATE ${CURL_INCLUDE_DIRS})
+    target_link_libraries(engine_rpc PRIVATE ${CURL_LIBRARIES})
+else()
+    message(STATUS "RPC: libcurl NOT found, etcd service discovery compiled out")
+    # 排除 etcd 文件
+    list(FILTER RPC_SOURCES EXCLUDE REGEX ".*ce_etcd.*\\.c$")
+    # 重新设置源文件
+    set_target_properties(engine_rpc PROPERTIES SOURCES "")
+    target_sources(engine_rpc PRIVATE ${RPC_SOURCES})
+endif()
+
 target_compile_options(engine_rpc PRIVATE
     $<$<C_COMPILER_ID:GNU>:-Wall -Wextra -std=c99>
     $<$<C_COMPILER_ID:Clang>:-Wall -Wextra -std=c99>

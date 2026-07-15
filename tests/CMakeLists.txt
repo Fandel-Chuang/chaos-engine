@@ -354,6 +354,16 @@ target_link_libraries(test_codec PRIVATE engine_codec engine_core)
 set_target_properties(test_codec PROPERTIES LINKER_LANGUAGE C)
 add_test(NAME codec COMMAND test_codec)
 
+# ---- test_etcd_registry (etcd 服务发现) ----
+add_executable(test_etcd_registry unit/test_etcd_registry.c)
+target_include_directories(test_etcd_registry PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+    ${CMAKE_SOURCE_DIR}/src_c
+)
+target_link_libraries(test_etcd_registry PRIVATE engine_rpc engine_core pthread)
+set_target_properties(test_etcd_registry PROPERTIES LINKER_LANGUAGE C)
+add_test(NAME etcd_registry COMMAND test_etcd_registry)
+
 # ============================================================
 # 性能基准测试 (Phase 2.5/2.6)
 # ============================================================
