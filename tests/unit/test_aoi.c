@@ -226,6 +226,204 @@ static void test_aoi_replication_integration(void) {
     printf("PASS\n");
 }
 
+/* ---- Grid AOI 测试 ---- */
+
+static void test_aoi_grid_basic(void) {
+    printf("  test_aoi_grid_basic... ");
+
+    /* 创建 1000x1000 世界，cell 大小 100x100，默认半径 50 */
+    CeAoiGrid* grid = ce_aoi_grid_create(1000.0f, 1000.0f, 100.0f, 100.0f, 50.0f);
+    assert(grid != NULL);
+    assert(ce_aoi_grid_entity_count(grid) == 0);
+
+    /* 添加 3 个实体 */
+    assert(ce_aoi_grid_enter(grid, 1, 0.0f, 0.0f, 0.0f) == CE_OK);
+    assert(ce_aoi_grid_enter(grid, 2, 10.0f, 0.0f, 0.0f) == CE_OK);   /* 半径 50 内 */
+    assert(ce_aoi_grid_enter(grid, 3, 200.0f, 200.0f, 0.0f) == CE_OK); /* 半径 50 外 */
+    assert(ce_aoi_grid_entity_count(grid) == 3);
+
+    /* 重复进入应失败 */
+    assert(ce_aoi_grid_enter(grid, 1, 5.0f, 5.0f, 0.0f) == CE_ERR);
+
+    /* 越界应失败 */
+    assert(ce_aoi_grid_enter(grid, 4, -1.0f, 0.0f, 0.0f) == CE_ERR);
+    assert(ce_aoi_grid_enter(grid, 4, 1001.0f, 0.0f, 0.0f) == CE_ERR);
+
+    /* 查询实体 1 周围（半径 50）应有实体 2 */
+    uint32_t ids[32];
+    int count = ce_aoi_grid_query(grid, 0.0f, 0.0f, 0.0f, 50.0f, ids, 32);
+    assert(count == 2);  /* 实体 1 自己 + 实体 2 */
+
+    /* 查询远离实体 3 的位置 */
+    count = ce_aoi_grid_query(grid, 0.0f, 0.0f, 0.0f, 10.0f, ids, 32);
+    assert(count == 2);  /* 实体 1 和 2 都在 (0,0) 半径 10 内? 不，实体2在(10,0) */
+    /* 实体 1 在 (0,0)，实体 2 在 (10,0)，半径 10 内 */
+    /* dist(0,0 -> 10,0) = 10, 10^2 = 100, 10^2 = 100, <= 100 是 true */
+    /* 所以 count == 2 */
+
+    /* 查询实体 3 周围应只有实体 3 自己 */
+    count = ce_aoi_grid_query(grid, 200.0f, 200.0f, 0.0f, 50.0f, ids, 32);
+    assert(count == 1);
+    assert(ids[0] == 3);
+
+    /* 移动实体 2 到远处 */
+    assert(ce_aoi_grid_move(grid, 2, 200.0f, 200.0f, 0.0f) == CE_OK);
+
+    /* 现在查询 (0,0) 半径 50 只有实体 1 */
+    count = ce_aoi_grid_query(grid, 0.0f, 0.0f, 0.0f, 50.0f, ids, 32);
+    assert(count == 1);
+    assert(ids[0] == 1);
+
+    /* 查询 (200,200) 半径 50 应有实体 2 和 3 */
+    count = ce_aoi_grid_query(grid, 200.0f, 200.0f, 0.0f, 50.0f, ids, 32);
+    assert(count == 2);
+
+    /* 移动不存在的实体应失败 */
+    assert(ce_aoi_grid_move(grid, 999, 50.0f, 50.0f, 0.0f) == CE_ERR);
+
+    /* 移动到越界应失败 */
+    assert(ce_aoi_grid_move(grid, 1, -1.0f, 0.0f, 0.0f) == CE_ERR);
+
+    /* 离开实体 1 */
+    assert(ce_aoi_grid_leave(grid, 1) == CE_OK);
+    assert(ce_aoi_grid_entity_count(grid) == 2);
+
+    /* 离开不存在的实体应失败 */
+    assert(ce_aoi_grid_leave(grid, 1) == CE_ERR);
+
+    /* 查询确认实体 1 已移除 */
+    count = ce_aoi_grid_query(grid, 0.0f, 0.0f, 0.0f, 50.0f, ids, 32);
+    assert(count == 0);
+
+    ce_aoi_grid_destroy(grid);
+    printf("PASS\n");
+}
+
+static void test_aoi_grid_stress(void) {
+    printf("  test_aoi_grid_stress... ");
+
+    /* 创建 2000x2000 世界，cell 50x50，默认半径 100 */
+    CeAoiGrid* grid = ce_aoi_grid_create(2000.0f, 2000.0f,
+                                          50.0f, 50.0f, 100.0f);
+    assert(grid != NULL);
+
+    const int N = 1000;
+    /* 用固定种子保证可复现 */
+    srand(42);
+
+    /* 添加 1000 个随机实体 */
+    for (int i = 0; i < N; i++) {
+        float x = (float)(rand() % 2000);
+        float y = (float)(rand() % 2000);
+        assert(ce_aoi_grid_enter(grid, (uint32_t)i, x, y, 0.0f) == CE_OK);
+    }
+    assert(ce_aoi_grid_entity_count(grid) == N);
+
+    /* 暴力验证: Grid query 结果应与线性扫描一致 */
+    /* 存储所有实体坐标 */
+    float* pos_x = (float*)malloc((size_t)N * sizeof(float));
+    float* pos_y = (float*)malloc((size_t)N * sizeof(float));
+    assert(pos_x && pos_y);
+
+    /* 重新获取坐标（从 grid 内部状态无法直接读取，所以重新放置并记录） */
+    /* 由于我们已经 enter 了实体，我们用相同种子重新生成坐标来验证 */
+    srand(42);
+    for (int i = 0; i < N; i++) {
+        pos_x[i] = (float)(rand() % 2000);
+        pos_y[i] = (float)(rand() % 2000);
+    }
+
+    /* 对几个随机查询点验证 */
+    float query_radius = 100.0f;
+    for (int q = 0; q < 10; q++) {
+        float qx = (float)(rand() % 2000);
+        float qy = (float)(rand() % 2000);
+
+        /* Grid 查询 */
+        uint32_t grid_ids[2048];
+        int grid_count = ce_aoi_grid_query(grid, qx, qy, 0.0f,
+                                            query_radius, grid_ids, 2048);
+
+        /* 线性扫描验证 */
+        float r_sq = query_radius * query_radius;
+        int linear_count = 0;
+        for (int i = 0; i < N; i++) {
+            float dx = qx - pos_x[i];
+            float dy = qy - pos_y[i];
+            if (dx * dx + dy * dy <= r_sq) {
+                linear_count++;
+            }
+        }
+
+        assert(grid_count == linear_count);
+    }
+
+    /* 随机移动 1000 次并验证 */
+    for (int iter = 0; iter < N; iter++) {
+        uint32_t eid = (uint32_t)(rand() % N);
+        float nx = (float)(rand() % 2000);
+        float ny = (float)(rand() % 2000);
+        assert(ce_aoi_grid_move(grid, eid, nx, ny, 0.0f) == CE_OK);
+        pos_x[eid] = nx;
+        pos_y[eid] = ny;
+    }
+
+    /* 再次验证查询正确性 */
+    for (int q = 0; q < 10; q++) {
+        float qx = (float)(rand() % 2000);
+        float qy = (float)(rand() % 2000);
+
+        uint32_t grid_ids[2048];
+        int grid_count = ce_aoi_grid_query(grid, qx, qy, 0.0f,
+                                            query_radius, grid_ids, 2048);
+
+        float r_sq = query_radius * query_radius;
+        int linear_count = 0;
+        for (int i = 0; i < N; i++) {
+            float dx = qx - pos_x[i];
+            float dy = qy - pos_y[i];
+            if (dx * dx + dy * dy <= r_sq) {
+                linear_count++;
+            }
+        }
+
+        assert(grid_count == linear_count);
+    }
+
+    /* 离开一半实体，验证数量 */
+    for (int i = 0; i < N; i += 2) {
+        assert(ce_aoi_grid_leave(grid, (uint32_t)i) == CE_OK);
+    }
+    assert(ce_aoi_grid_entity_count(grid) == N / 2);
+
+    /* 再次验证查询正确性 */
+    for (int q = 0; q < 10; q++) {
+        float qx = (float)(rand() % 2000);
+        float qy = (float)(rand() % 2000);
+
+        uint32_t grid_ids[2048];
+        int grid_count = ce_aoi_grid_query(grid, qx, qy, 0.0f,
+                                            query_radius, grid_ids, 2048);
+
+        float r_sq = query_radius * query_radius;
+        int linear_count = 0;
+        for (int i = 1; i < N; i += 2) {  /* 只剩奇数 ID */
+            float dx = qx - pos_x[i];
+            float dy = qy - pos_y[i];
+            if (dx * dx + dy * dy <= r_sq) {
+                linear_count++;
+            }
+        }
+
+        assert(grid_count == linear_count);
+    }
+
+    free(pos_x);
+    free(pos_y);
+    ce_aoi_grid_destroy(grid);
+    printf("PASS\n");
+}
+
 int main(void) {
     printf("=== AOI Cross-Linked List Tests ===\n");
 
@@ -238,5 +436,13 @@ int main(void) {
     test_aoi_replication_integration();
 
     printf("\nAll AOI tests passed!\n");
+
+    /* ---- Grid AOI Tests ---- */
+    printf("\n=== AOI Grid Tests ===\n");
+
+    test_aoi_grid_basic();
+    test_aoi_grid_stress();
+
+    printf("\nAll AOI Grid tests passed!\n");
     return 0;
 }
