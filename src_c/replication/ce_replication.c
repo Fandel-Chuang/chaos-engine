@@ -45,6 +45,196 @@ static uint32_t hash_entity_id(uint64_t id, uint32_t capacity) {
     return (uint32_t)(h % capacity);
 }
 
+/* ---- 内部扩容函数 ---- */
+
+/** 确保脏标表有足够容量, 不够则 realloc 翻倍 */
+bool ce_repl_ensure_dirty_capacity(CeReplContext* ctx, uint32_t needed) {
+    if (needed <= ctx->dirty_capacity) return true;
+
+    /* 翻倍扩容直到满足需求 */
+    uint32_t new_cap = ctx->dirty_capacity;
+    while (new_cap < needed) {
+        new_cap = (new_cap == 0) ? CE_REPL_INITIAL_DIRTY_CAPACITY : new_cap * 2;
+    }
+
+    CeReplDirtyEntry* new_entities = (CeReplDirtyEntry*)realloc(
+        ctx->dirty_entities, new_cap * sizeof(CeReplDirtyEntry));
+    if (!new_entities) {
+        CE_LOG_ERROR("REPL", "dirty_entities realloc failed (%u -> %u)",
+                     ctx->dirty_capacity, new_cap);
+        return false;
+    }
+    /* 清零新分配的部分 */
+    memset(new_entities + ctx->dirty_capacity, 0,
+           (new_cap - ctx->dirty_capacity) * sizeof(CeReplDirtyEntry));
+    ctx->dirty_entities = new_entities;
+
+    /* 哈希表也需要扩容 (保持 2x 脏实体容量) */
+    uint32_t new_hash_cap = new_cap * 2;
+    uint64_t* new_hash_keys = (uint64_t*)calloc(new_hash_cap, sizeof(uint64_t));
+    uint32_t* new_hash_values = (uint32_t*)calloc(new_hash_cap, sizeof(uint32_t));
+    if (!new_hash_keys || !new_hash_values) {
+        free(new_hash_keys);
+        free(new_hash_values);
+        CE_LOG_ERROR("REPL", "dirty hash table realloc failed (cap=%u)", new_hash_cap);
+        return false;
+    }
+
+    /* 重新插入所有已有条目 (rehash) */
+    for (uint32_t i = 0; i < ctx->dirty_count; i++) {
+        uint64_t eid = ctx->dirty_entities[i].entity_id;
+        uint32_t idx = hash_entity_id(eid, new_hash_cap);
+        for (uint32_t j = 0; j < new_hash_cap; j++) {
+            uint32_t probe = (idx + j) % new_hash_cap;
+            if (new_hash_keys[probe] == 0) {
+                new_hash_keys[probe] = eid;
+                new_hash_values[probe] = i;
+                break;
+            }
+        }
+    }
+
+    free(ctx->dirty_hash_keys);
+    free(ctx->dirty_hash_values);
+    ctx->dirty_hash_keys = new_hash_keys;
+    ctx->dirty_hash_values = new_hash_values;
+    ctx->dirty_hash_capacity = new_hash_cap;
+    ctx->dirty_capacity = new_cap;
+
+    CE_LOG_INFO("REPL", "dirty table expanded: entities=%u hash=%u",
+                ctx->dirty_capacity, ctx->dirty_hash_capacity);
+    return true;
+}
+
+/** 确保 Mailbox 哈希表有足够容量, 不够则 realloc 翻倍 */
+bool ce_repl_ensure_mailbox_capacity(CeReplContext* ctx, uint32_t needed) {
+    /* load factor: 保持 hash_capacity >= count * 2 */
+    uint32_t needed_hash = needed * 2;
+    if (needed_hash <= ctx->mailbox_capacity) return true;
+
+    uint32_t new_cap = ctx->mailbox_capacity;
+    while (new_cap < needed_hash) {
+        new_cap = (new_cap == 0) ? CE_REPL_INITIAL_MAILBOX_CAPACITY : new_cap * 2;
+    }
+
+    uint64_t* new_keys = (uint64_t*)malloc(new_cap * sizeof(uint64_t));
+    uint32_t* new_values = (uint32_t*)malloc(new_cap * sizeof(uint32_t));
+    if (!new_keys || !new_values) {
+        free(new_keys);
+        free(new_values);
+        CE_LOG_ERROR("REPL", "mailbox realloc failed (cap=%u)", new_cap);
+        return false;
+    }
+
+    /* 初始化空槽标记 */
+    for (uint32_t i = 0; i < new_cap; i++) {
+        new_keys[i] = UINT64_MAX;
+    }
+
+    /* 重新插入所有已有条目 (rehash) */
+    uint32_t reinserted = 0;
+    for (uint32_t i = 0; i < ctx->mailbox_capacity && reinserted < ctx->mailbox_count; i++) {
+        if (ctx->mailbox_keys[i] != UINT64_MAX) {
+            uint64_t key = ctx->mailbox_keys[i];
+            uint32_t val = ctx->mailbox_values[i];
+            uint32_t idx = hash_entity_id(key, new_cap);
+            for (uint32_t j = 0; j < new_cap; j++) {
+                uint32_t probe = (idx + j) % new_cap;
+                if (new_keys[probe] == UINT64_MAX) {
+                    new_keys[probe] = key;
+                    new_values[probe] = val;
+                    reinserted++;
+                    break;
+                }
+            }
+        }
+    }
+
+    free(ctx->mailbox_keys);
+    free(ctx->mailbox_values);
+    ctx->mailbox_keys = new_keys;
+    ctx->mailbox_values = new_values;
+    ctx->mailbox_capacity = new_cap;
+
+    CE_LOG_INFO("REPL", "mailbox hash table expanded: capacity=%u", ctx->mailbox_capacity);
+    return true;
+}
+
+/** 确保属主映射哈希表有足够容量, 不够则 realloc 翻倍 */
+bool ce_repl_ensure_owner_capacity(CeReplContext* ctx, uint32_t needed) {
+    uint32_t needed_hash = needed * 2;
+    if (needed_hash <= ctx->owner_hash_capacity) return true;
+
+    uint32_t new_hash_cap = ctx->owner_hash_capacity;
+    while (new_hash_cap < needed_hash) {
+        new_hash_cap = (new_hash_cap == 0) ? CE_REPL_INITIAL_OWNER_CAPACITY * 2 : new_hash_cap * 2;
+    }
+    uint32_t new_cap = new_hash_cap / 2;
+
+    uint64_t* new_hash_keys = (uint64_t*)calloc(new_hash_cap, sizeof(uint64_t));
+    uint64_t* new_hash_values = (uint64_t*)calloc(new_hash_cap, sizeof(uint64_t));
+    if (!new_hash_keys || !new_hash_values) {
+        free(new_hash_keys);
+        free(new_hash_values);
+        CE_LOG_ERROR("REPL", "owner hash table realloc failed (cap=%u)", new_hash_cap);
+        return false;
+    }
+
+    /* 重新插入所有已有条目 (rehash) */
+    for (uint32_t i = 0; i < ctx->owner_hash_capacity; i++) {
+        if (ctx->owner_hash_keys[i] != 0) {
+            uint64_t key = ctx->owner_hash_keys[i];
+            uint64_t val = ctx->owner_hash_values[i];
+            uint32_t idx = hash_entity_id(key, new_hash_cap);
+            for (uint32_t j = 0; j < new_hash_cap; j++) {
+                uint32_t probe = (idx + j) % new_hash_cap;
+                if (new_hash_keys[probe] == 0) {
+                    new_hash_keys[probe] = key;
+                    new_hash_values[probe] = val;
+                    break;
+                }
+            }
+        }
+    }
+
+    free(ctx->owner_hash_keys);
+    free(ctx->owner_hash_values);
+    ctx->owner_hash_keys = new_hash_keys;
+    ctx->owner_hash_values = new_hash_values;
+    ctx->owner_hash_capacity = new_hash_cap;
+    ctx->owner_capacity = new_cap;
+
+    CE_LOG_INFO("REPL", "owner hash table expanded: capacity=%u hash=%u",
+                ctx->owner_capacity, ctx->owner_hash_capacity);
+    return true;
+}
+
+/** 确保 RPC pending 队列有足够容量, 不够则 realloc 翻倍 */
+bool ce_repl_ensure_rpc_pending_capacity(CeReplContext* ctx, uint32_t needed) {
+    if (needed <= ctx->rpc_pending_capacity) return true;
+
+    uint32_t new_cap = ctx->rpc_pending_capacity;
+    while (new_cap < needed) {
+        new_cap = (new_cap == 0) ? CE_REPL_INITIAL_RPC_PENDING : new_cap * 2;
+    }
+
+    CeRpcPendingEntry* new_pending = (CeRpcPendingEntry*)realloc(
+        ctx->rpc_pending, new_cap * sizeof(CeRpcPendingEntry));
+    if (!new_pending) {
+        CE_LOG_ERROR("RPC", "rpc_pending realloc failed (%u -> %u)",
+                     ctx->rpc_pending_capacity, new_cap);
+        return false;
+    }
+    /* 清零新分配部分 */
+    memset(new_pending + ctx->rpc_pending_capacity, 0,
+           (new_cap - ctx->rpc_pending_capacity) * sizeof(CeRpcPendingEntry));
+    ctx->rpc_pending = new_pending;
+    ctx->rpc_pending_capacity = new_cap;
+
+    CE_LOG_INFO("RPC", "rpc_pending queue expanded: capacity=%u", ctx->rpc_pending_capacity);
+    return true;
+}
+
 /* ---- 辅助: 在脏标表中查找或创建条目 ---- */
 
 CeReplDirtyEntry* ce_repl_find_or_create_dirty(CeReplContext* ctx, uint64_t entity_id) {
@@ -52,15 +242,25 @@ CeReplDirtyEntry* ce_repl_find_or_create_dirty(CeReplContext* ctx, uint64_t enti
 
     uint32_t idx = hash_entity_id(entity_id, ctx->dirty_hash_capacity);
 
-    /* 线性探测 */
+    /* 线性探测查找 */
     for (uint32_t i = 0; i < ctx->dirty_hash_capacity; i++) {
         uint32_t probe = (idx + i) % ctx->dirty_hash_capacity;
         if (ctx->dirty_hash_keys[probe] == entity_id) {
             /* 找到已有条目 */
             return &ctx->dirty_entities[ctx->dirty_hash_values[probe]];
         }
-        if (ctx->dirty_hash_keys[probe] == 0 && ctx->dirty_count < CE_REPL_MAX_DIRTY_ENTITIES) {
-            /* 空槽位，创建新条目 */
+        if (ctx->dirty_hash_keys[probe] == 0) {
+            /* 空槽位: 需要创建新条目. 先检查容量, 不够则扩容后重试 */
+            if (ctx->dirty_count >= ctx->dirty_capacity) {
+                if (!ce_repl_ensure_dirty_capacity(ctx, ctx->dirty_count + 1)) {
+                    CE_LOG_ERROR("REPL", "failed to expand dirty table (count=%u)",
+                                 ctx->dirty_count);
+                    return NULL;
+                }
+                /* 扩容后哈希表已 rehash, 重新探测 */
+                return ce_repl_find_or_create_dirty(ctx, entity_id);
+            }
+
             uint32_t entry_idx = ctx->dirty_count++;
             ctx->dirty_hash_keys[probe] = entity_id;
             ctx->dirty_hash_values[probe] = entry_idx;
@@ -73,21 +273,30 @@ CeReplDirtyEntry* ce_repl_find_or_create_dirty(CeReplContext* ctx, uint64_t enti
         }
     }
 
-    /* 哈希表满或脏实体表满 */
-    if (ctx->dirty_count >= CE_REPL_MAX_DIRTY_ENTITIES) {
-        CE_LOG_ERROR("REPL", "dirty entity table full (%d entries). "
-                     "Increase CE_REPL_MAX_DIRTY_ENTITIES.",
-                     CE_REPL_MAX_DIRTY_ENTITIES);
+    /* 哈希表满 (load factor 过高), 扩容后重试 */
+    if (!ce_repl_ensure_dirty_capacity(ctx, ctx->dirty_count + 1)) {
+        CE_LOG_ERROR("REPL", "dirty hash table full and expand failed (count=%u)",
+                     ctx->dirty_count);
+        return NULL;
     }
-    return NULL;
+    return ce_repl_find_or_create_dirty(ctx, entity_id);
 }
 
-/* ---- 辅助: 查找属主 ---- */
+/* ---- 辅助: 查找属主 (哈希表 O(1)) ---- */
 
 uint64_t ce_repl_find_owner(CeReplContext* ctx, uint64_t entity_id) {
-    for (uint32_t i = 0; i < ctx->owner_count; i++) {
-        if (ctx->owner_entity_ids[i] == entity_id) {
-            return ctx->owner_client_ids[i];
+    if (ctx->owner_hash_capacity == 0) return 0;
+
+    uint32_t idx = hash_entity_id(entity_id, ctx->owner_hash_capacity);
+
+    for (uint32_t i = 0; i < ctx->owner_hash_capacity; i++) {
+        uint32_t probe = (idx + i) % ctx->owner_hash_capacity;
+        if (ctx->owner_hash_keys[probe] == entity_id) {
+            return ctx->owner_hash_values[probe];
+        }
+        if (ctx->owner_hash_keys[probe] == 0) {
+            /* 空槽 = 不存在 */
+            return 0;
         }
     }
     return 0;
@@ -102,33 +311,59 @@ CeReplContext* ce_repl_init(const CeReplConfig* config) {
         return NULL;
     }
 
-    /* 默认配置 */
-    uint32_t max_dirty = config ? config->max_dirty_entities : CE_REPL_MAX_DIRTY_ENTITIES;
-    if (max_dirty == 0) max_dirty = CE_REPL_MAX_DIRTY_ENTITIES;
+    /* 初始容量 (后续可动态扩容) */
+    uint32_t init_dirty = CE_REPL_INITIAL_DIRTY_CAPACITY;
+    uint32_t init_owner = CE_REPL_INITIAL_OWNER_CAPACITY;
+    uint32_t init_mailbox = CE_REPL_INITIAL_MAILBOX_CAPACITY;
+    uint32_t init_rpc_pending = CE_REPL_INITIAL_RPC_PENDING;
 
-    /* 初始化脏标哈希表 (容量为 2 倍以降低碰撞) */
-    ctx->dirty_hash_capacity = max_dirty * 2;
+    (void)config;  /* 配置中的 max_dirty 现在只是建议值, 初始用默认值, 动态扩容 */
+
+    /* 初始化脏标表 (动态分配) */
+    ctx->dirty_capacity = init_dirty;
+    ctx->dirty_count = 0;
+    ctx->dirty_entities = (CeReplDirtyEntry*)calloc(init_dirty, sizeof(CeReplDirtyEntry));
+    ctx->dirty_hash_capacity = init_dirty * 2;
     ctx->dirty_hash_keys = (uint64_t*)calloc(ctx->dirty_hash_capacity, sizeof(uint64_t));
     ctx->dirty_hash_values = (uint32_t*)calloc(ctx->dirty_hash_capacity, sizeof(uint32_t));
 
-    /* 初始化属主映射 */
-    ctx->owner_entity_ids = (uint64_t*)calloc(max_dirty, sizeof(uint64_t));
-    ctx->owner_client_ids = (uint64_t*)calloc(max_dirty, sizeof(uint64_t));
+    /* 初始化属主映射哈希表 (动态分配, O(1) 查找) */
+    ctx->owner_count = 0;
+    ctx->owner_capacity = init_owner;
+    ctx->owner_hash_capacity = init_owner * 2;
+    ctx->owner_hash_keys = (uint64_t*)calloc(ctx->owner_hash_capacity, sizeof(uint64_t));
+    ctx->owner_hash_values = (uint64_t*)calloc(ctx->owner_hash_capacity, sizeof(uint64_t));
 
-    if (!ctx->dirty_hash_keys || !ctx->dirty_hash_values ||
-        !ctx->owner_entity_ids || !ctx->owner_client_ids) {
+    /* 初始化 Mailbox 哈希表 (动态分配) */
+    ctx->mailbox_count = 0;
+    ctx->mailbox_capacity = init_mailbox;
+    ctx->mailbox_keys = (uint64_t*)malloc(init_mailbox * sizeof(uint64_t));
+    ctx->mailbox_values = (uint32_t*)malloc(init_mailbox * sizeof(uint32_t));
+
+    /* 初始化 RPC pending 队列 (动态分配) */
+    ctx->rpc_pending_count = 0;
+    ctx->rpc_pending_capacity = init_rpc_pending;
+    ctx->rpc_call_id_counter = 0;
+    ctx->rpc_pending = (CeRpcPendingEntry*)calloc(init_rpc_pending, sizeof(CeRpcPendingEntry));
+
+    /* 检查所有分配 */
+    if (!ctx->dirty_entities || !ctx->dirty_hash_keys || !ctx->dirty_hash_values ||
+        !ctx->owner_hash_keys || !ctx->owner_hash_values ||
+        !ctx->mailbox_keys || !ctx->mailbox_values ||
+        !ctx->rpc_pending) {
         CE_LOG_ERROR("REPL", "failed to allocate internal tables");
         ce_repl_shutdown(ctx);
         return NULL;
     }
 
-    CE_LOG_INFO("REPL", "initialized (max_dirty=%u, hash_cap=%u)",
-                max_dirty, ctx->dirty_hash_capacity);
-
-    /* 初始化 Mailbox 哈希表 (空槽位标记为 UINT64_MAX) */
-    for (uint32_t i = 0; i < 4096; i++) {
+    /* 初始化 Mailbox 空槽标记为 UINT64_MAX */
+    for (uint32_t i = 0; i < init_mailbox; i++) {
         ctx->mailbox_keys[i] = UINT64_MAX;
     }
+
+    CE_LOG_INFO("REPL", "initialized (dirty_cap=%u, owner_cap=%u, mailbox_cap=%u, rpc_pending_cap=%u)",
+                ctx->dirty_capacity, ctx->owner_capacity,
+                ctx->mailbox_capacity, ctx->rpc_pending_capacity);
 
     return ctx;
 }
@@ -136,10 +371,21 @@ CeReplContext* ce_repl_init(const CeReplConfig* config) {
 void ce_repl_shutdown(CeReplContext* ctx) {
     if (!ctx) return;
 
+    /* 释放 RPC pending 队列中的 payload 缓冲区 */
+    if (ctx->rpc_pending) {
+        for (uint32_t i = 0; i < ctx->rpc_pending_count; i++) {
+            free(ctx->rpc_pending[i].payload);
+        }
+        free(ctx->rpc_pending);
+    }
+
+    free(ctx->dirty_entities);
     free(ctx->dirty_hash_keys);
     free(ctx->dirty_hash_values);
-    free(ctx->owner_entity_ids);
-    free(ctx->owner_client_ids);
+    free(ctx->owner_hash_keys);
+    free(ctx->owner_hash_values);
+    free(ctx->mailbox_keys);
+    free(ctx->mailbox_values);
     free(ctx);
 
     CE_LOG_INFO("REPL", "shutdown complete");
@@ -421,8 +667,6 @@ void ce_repl_flush(CeReplContext* ctx) {
     memset(ctx->dirty_hash_keys, 0, sizeof(uint64_t) * ctx->dirty_hash_capacity);
     memset(ctx->dirty_hash_values, 0, sizeof(uint32_t) * ctx->dirty_hash_capacity);
     ctx->dirty_count = 0;
-
-    /* 更新统计 */
     uint64_t t_end = ce_time_now_us();
     ctx->stats.total_flushes++;
     ctx->stats.total_entities_synced += synced_entities;
@@ -468,26 +712,52 @@ void ce_repl_set_aoi(CeReplContext* ctx, CeAoiContext* aoi) {
 void ce_repl_set_owner(CeReplContext* ctx, uint64_t entity_id, uint64_t client_id) {
     if (!ctx) return;
 
-    /* 查找已有映射 */
-    for (uint32_t i = 0; i < ctx->owner_count; i++) {
-        if (ctx->owner_entity_ids[i] == entity_id) {
+    /* 哈希表查找已有映射 */
+    uint32_t idx = hash_entity_id(entity_id, ctx->owner_hash_capacity);
+    for (uint32_t i = 0; i < ctx->owner_hash_capacity; i++) {
+        uint32_t probe = (idx + i) % ctx->owner_hash_capacity;
+        if (ctx->owner_hash_keys[probe] == entity_id) {
+            /* 找到已有映射 */
             if (client_id == 0) {
-                /* 删除映射: 与最后一个交换后缩减 */
-                ctx->owner_entity_ids[i] = ctx->owner_entity_ids[ctx->owner_count - 1];
-                ctx->owner_client_ids[i] = ctx->owner_client_ids[ctx->owner_count - 1];
+                /* 删除映射: 用 0 标记为空槽 (不缩容, 下次 rehash 时自然回收) */
+                ctx->owner_hash_keys[probe] = 0;
+                ctx->owner_hash_values[probe] = 0;
                 ctx->owner_count--;
             } else {
-                ctx->owner_client_ids[i] = client_id;
+                ctx->owner_hash_values[probe] = client_id;
+            }
+            return;
+        }
+        if (ctx->owner_hash_keys[probe] == 0) {
+            /* 空槽 = 不存在该映射 */
+            if (client_id != 0) {
+                /* 新映射: 检查容量, 不够则扩容 */
+                if (ctx->owner_count >= ctx->owner_capacity) {
+                    if (!ce_repl_ensure_owner_capacity(ctx, ctx->owner_count + 1)) {
+                        CE_LOG_ERROR("REPL", "failed to expand owner table (count=%u)",
+                                     ctx->owner_count);
+                        return;
+                    }
+                    /* 扩容后重新插入 */
+                    ce_repl_set_owner(ctx, entity_id, client_id);
+                    return;
+                }
+                ctx->owner_hash_keys[probe] = entity_id;
+                ctx->owner_hash_values[probe] = client_id;
+                ctx->owner_count++;
             }
             return;
         }
     }
 
-    /* 新映射 */
-    if (client_id != 0 && ctx->owner_count < CE_REPL_MAX_DIRTY_ENTITIES) {
-        ctx->owner_entity_ids[ctx->owner_count] = entity_id;
-        ctx->owner_client_ids[ctx->owner_count] = client_id;
-        ctx->owner_count++;
+    /* 哈希表满, 扩容后重试 */
+    if (client_id != 0) {
+        if (!ce_repl_ensure_owner_capacity(ctx, ctx->owner_count + 1)) {
+            CE_LOG_ERROR("REPL", "owner hash table full and expand failed (count=%u)",
+                         ctx->owner_count);
+            return;
+        }
+        ce_repl_set_owner(ctx, entity_id, client_id);
     }
 }
 
