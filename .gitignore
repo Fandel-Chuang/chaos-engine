@@ -34,3 +34,5 @@ build-*/
 llm/
 .ci-reports/
 third_party/
+scripts/__pycache__/
+*.h.bak

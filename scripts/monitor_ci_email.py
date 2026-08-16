@@ -33,6 +33,9 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPORT_DIR = os.path.join(PROJECT_DIR, ".ci-reports", "qq-mail-alerts")
 STATE_FILE = os.path.join(REPORT_DIR, "notified_ids.json")
 
+# cron 以绝对路径调用本脚本时 cwd 不在 scripts/，需显式加入以便 import 同目录模块
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # CI 失败邮件关键词（精确匹配主题和发件人）
 CI_FAIL_KEYWORDS = ['failed', 'failure', '失败', 'build failed',
                     'CI failed', 'run failed', 'workflow run']
@@ -177,13 +180,25 @@ def main():
         if new_alerts:
             lines = []
             for a in new_alerts:
-                lines.append(f"🔴 CI 失败邮件")
-                lines.append(f"主题: {a['subject']}")
-                lines.append(f"时间: {a['date']}")
-                lines.append(f"内容: {a['body'][:500]}")
+                # 优先用 LLM 结构化摘要（本地 ollama，免费离线）
+                # 任何失败都退回原始格式，绝不因摘要模块问题丢掉告警
+                pushed = None
+                try:
+                    from ci_alert_summarize import summarize, render
+                    pushed = render(summarize(a['subject'], a['body']))
+                except Exception as e:
+                    print(f"[warn] LLM 摘要不可用，退回原始格式: {e}", file=sys.stderr)
+
+                if pushed:
+                    lines.append(pushed)
+                else:
+                    lines.append(f"🔴 CI 失败邮件")
+                    lines.append(f"主题: {a['subject']}")
+                    lines.append(f"时间: {a['date']}")
+                    lines.append(f"内容: {a['body'][:500]}")
                 lines.append("")
 
-                # 存档
+                # 存档（始终保留完整原文，便于事后追查）
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 with open(os.path.join(REPORT_DIR, f"alert-{ts}.md"), "w") as f:
                     f.write(f"# CI 失败告警\n\n- 主题: {a['subject']}\n- 时间: {a['date']}\n\n{a['body']}")
