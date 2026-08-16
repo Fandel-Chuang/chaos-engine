@@ -8,6 +8,8 @@
 #include "rpc/ce_service_registry.h"
 #include "rpc/ce_coroutine.h"
 #include "public_api/ce_log.h"
+#include "core/ce_memory.h"
+#include "log/ce_log_internal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -53,7 +55,8 @@ static void co_call_ping(void* arg) {
 }
 
 int main(void) {
-    ce_log_init(CE_LOG_INFO, "logs/rpc_client_test.log");
+    CeAllocator* alloc = ce_allocator_create(NULL, NULL);
+    ce_log_init(alloc, CE_LOG_INFO, "logs/rpc_client_test.log");
 
     printf("=== RPC Client Test ===\n");
 
@@ -82,6 +85,7 @@ int main(void) {
     if (resp) free(resp);
 
     ce_rpc_client_destroy(cli);
+    if (alloc) ce_allocator_destroy(alloc);
 
     printf("\n=== All tests passed ===\n");
     return 0;

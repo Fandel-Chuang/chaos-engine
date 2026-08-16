@@ -21,12 +21,8 @@ file(GLOB_RECURSE ENGINE_CORE_SOURCES
 list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*_kern\\.c$")
 list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*\\.bpf\\.c$")
 
-# 如果 Lua 不可用，排除依赖 Lua 的源文件
-if(NOT LUA_LIB_FILE)
-    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*_lua\\.c$")
-    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*script/.*\\.c$")
-    add_compile_definitions(CHAOS_NO_LUA=1)
-endif()
+# 注意: Lua 相关源文件的过滤必须放在下面的 Lua 探测之后
+# (LUA_LIB_FILE 在此处尚未赋值, 见本文件 "Lua 5.4 路径" 一节)
 
 # 收集 public_api 头文件（仅用于 IDE 索引，不参与编译）
 file(GLOB_RECURSE ENGINE_PUBLIC_HEADERS
@@ -90,6 +86,15 @@ if(NOT LUA_HEADERS_OK OR NOT LUA_LIB_OK)
 endif()
 if(LUA_LIB_FILE)
     message(STATUS "Lua: headers=${LUA_HEADERS_DIR} lib=${LUA_LIB_FILE}")
+endif()
+
+# 如果 Lua 不可用，排除依赖 Lua 的源文件
+# (必须在 Lua 探测之后执行, 否则 LUA_LIB_FILE 为空会误排除全部 *_lua.c,
+#  导致 luaopen_* 符号缺失、chaos_router 等 target 链接失败)
+if(NOT LUA_LIB_FILE)
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*_lua\\.c$")
+    list(FILTER ENGINE_CORE_SOURCES EXCLUDE REGEX ".*script/.*\\.c$")
+    add_compile_definitions(CHAOS_NO_LUA=1)
 endif()
 
 # 静态库目标

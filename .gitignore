@@ -28,6 +28,8 @@ bin/
 *.exe
 build_bench/
 build_test/
+build-verify/
+build-*/
 .pids/
 llm/
 .ci-reports/

@@ -8,6 +8,8 @@
 #include "rpc/ce_rpc.h"
 #include "rpc/ce_service_registry.h"
 #include "public_api/ce_log.h"
+#include "core/ce_memory.h"
+#include "log/ce_log_internal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -39,7 +41,8 @@ static CeResult handle_echo(const uint8_t* req, uint32_t req_len,
 }
 
 int main(void) {
-    ce_log_init(CE_LOG_INFO, "logs/echo_service.log");
+    CeAllocator* alloc = ce_allocator_create(NULL, NULL);
+    ce_log_init(alloc, CE_LOG_INFO, "logs/echo_service.log");
 
     /* 创建 RPC 服务端 */
     CeRpcServer* srv = ce_rpc_server_create("echo_service", 9200);
@@ -68,6 +71,7 @@ int main(void) {
     /* 清理 */
     if (reg) ce_registry_destroy(reg);
     ce_rpc_server_destroy(srv);
+    if (alloc) ce_allocator_destroy(alloc);
 
     return 0;
 }

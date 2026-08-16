@@ -56,9 +56,17 @@ set_target_properties(engine_rpc PROPERTIES LINKER_LANGUAGE C)
 
 # ---- 示例程序 ----
 add_executable(echo_service example/echo_service.c)
+target_include_directories(echo_service PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+)
 target_link_libraries(echo_service PRIVATE engine_rpc engine_core)
 set_target_properties(echo_service PROPERTIES LINKER_LANGUAGE C)
 
 add_executable(rpc_client_test example/rpc_client_test.c)
+target_include_directories(rpc_client_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/src_c
+    ${CMAKE_SOURCE_DIR}/src_c/public_api
+)
 target_link_libraries(rpc_client_test PRIVATE engine_rpc engine_core)
 set_target_properties(rpc_client_test PROPERTIES LINKER_LANGUAGE C)
