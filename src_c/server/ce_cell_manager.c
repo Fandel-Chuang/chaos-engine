@@ -327,8 +327,19 @@ CeResult ce_cell_mgr_split(CeCellManager* mgr, CeCellId cell_id) {
         mgr->cell_capacity = new_cap;
     }
 
+    /* realloc 可能搬移整块 cells 数组，之前取的 cell 指针会变成悬空指针。
+     * 必须按索引重新取地址，否则后续写入是未定义行为。
+     * （sub_bounds 已在扩容前用旧边界算好，值语义，不受影响） */
+    cell = &mgr->cells[cell_idx];
+
     /* 原 Cell 变为第一个子 Cell */
     cell->bounds = sub_bounds[0];
+    /* FIXME(phase2-2.4): 这里直接清零会丢失原 Cell 内的全部实体——实体既未按
+     * 新边界重分配到 4 个子 Cell，也未迁移。根因是 CeCell 没有实体列表，
+     * 结构上无法枚举。正确算法（先枚举实体 → 按新边界归类 → 再改边界 →
+     * 重建 AOI 索引 → 通知 Router）见
+     * docs/spec/chaos-engine-phase2-cell-migration-spec-v0.1.md 第 2 章。
+     * 在实现该 spec 之前，请勿在生产环境触发 Cell 分裂。 */
     cell->entity_count = 0;
     cell->state = CE_CELL_ACTIVE;
 
