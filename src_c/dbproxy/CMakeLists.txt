@@ -4,9 +4,19 @@
 # ============================================================
 
 # ---- libmongoc 检测（条件编译原生驱动） ----
+# 注意 .pc 名称随大版本变化：libmongoc 2.x 提供 mongoc2，1.x 提供 libmongoc-1.0。
+# 历史上此处只探测 "mongoc"（该名称从不存在），导致 HAVE_MONGOC 恒为假、
+# 原生驱动始终被编译掉。按优先级依次探测。
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
-    pkg_check_modules(MONGOC QUIET mongoc)
+    foreach(_mongoc_pc mongoc2 libmongoc-1.0 mongoc)
+        if(NOT MONGOC_FOUND)
+            pkg_check_modules(MONGOC QUIET ${_mongoc_pc})
+            if(MONGOC_FOUND)
+                message(STATUS "DBProxy: libmongoc via pkg-config '${_mongoc_pc}' (${MONGOC_VERSION})")
+            endif()
+        endif()
+    endforeach()
 endif()
 
 file(GLOB DBPROXY_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.c")

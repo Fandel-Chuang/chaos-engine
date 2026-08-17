@@ -69,7 +69,8 @@ CeDbproxyNativeCtx* ce_dbproxy_native_init(const char* mongo_uri, int pool_size)
 
     /* 设置连接池大小 */
     mongoc_client_pool_max_size(ctx->pool, (uint32_t)pool_size);
-    mongoc_client_pool_min_size(ctx->pool, 1);
+    /* 注意：mongoc_client_pool_min_size() 在 libmongoc 2.x 已移除
+     * （1.x 中即已废弃且无实际效果），此处不再调用。 */
 
     strncpy(ctx->db_name, CE_DBPROXY_DB_NAME, sizeof(ctx->db_name) - 1);
     strncpy(ctx->coll_name, CE_DBPROXY_COLL_NAME, sizeof(ctx->coll_name) - 1);
@@ -130,7 +131,9 @@ CeResult ce_dbproxy_native_save(CeDbproxyNativeCtx* ctx,
     bson_error_t err;
     bool ok = mongoc_collection_update(coll,
                                         MONGOC_UPDATE_UPSERT,
-                                        query, update, &err);
+                                        query, update,
+                                        NULL /* write_concern: 用 collection 默认 */,
+                                        &err);
 
     if (!ok) {
         CE_LOG_ERROR("DBPROXY", "native_save: update failed for player %lu: %s",
@@ -240,7 +243,9 @@ CeResult ce_dbproxy_native_batch_save(CeDbproxyNativeCtx* ctx,
     mongoc_collection_t* coll = mongoc_client_get_collection(client,
                                                                ctx->db_name, ctx->coll_name);
 
-    mongoc_bulk_operation_t* bulk = mongoc_collection_create_bulk_operation_with_opts(coll);
+    /* opts=NULL 表示使用默认（有序批量 + collection 默认 write concern） */
+    mongoc_bulk_operation_t* bulk =
+        mongoc_collection_create_bulk_operation_with_opts(coll, NULL);
     if (!bulk) {
         CE_LOG_ERROR("DBPROXY", "native_batch_save: create_bulk failed");
         mongoc_collection_destroy(coll);
